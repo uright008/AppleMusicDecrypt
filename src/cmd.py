@@ -168,6 +168,11 @@ class InteractiveShell:
                 else:
                     await self.command_parser(command)
             except (EOFError, KeyboardInterrupt):
+                if it(Measurer).tasks_count() > 0:
+                    it(GlobalLogger).logger.info("There is still {} tasks, do you really want to exit? (y/N)".format(it(Measurer).tasks_count()))
+                    response = input().strip().lower()
+                    if response != 'y':
+                        continue
                 return
 
     async def on_2fa(self, username: str, password: str):
@@ -209,3 +214,5 @@ class InteractiveShell:
                 it(GlobalLogger).logger.info("Exit.")
                 if it(Config).localInstance.enable:
                     await self.localInstance.terminate()
+                else:
+                    sys.exit(0)
