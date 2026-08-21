@@ -96,3 +96,13 @@ There are two possible causes for this problem:
 
 ### The bit depth of the ripped audio file does not match the selected codec
 Some audio files provided by Apple Music are incorrectly encoded to a higher bit depth. This does not affect the content of the audio itself.
+
+## Flutter Android client
+
+A Material 3 Flutter client and a loopback-only HTTP control plane are available
+on the Android feature branch. The initial Android release reuses the upstream
+Python v2 core running in Termux, including its existing native media tools,
+rather than duplicating the media pipeline in Dart.
+
+See [docs/android-flutter.md](docs/android-flutter.md) for installation, build,
+security and architecture details.
