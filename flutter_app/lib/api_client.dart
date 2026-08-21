@@ -72,7 +72,28 @@ abstract interface class ManagerTransport {
   Future<void> close();
 }
 
-final class GrpcManagerTransport implements ManagerTransport {
+abstract interface class ManagerMediaTransport {
+  Stream<DecryptReply> decrypt(Stream<DecryptRequest> requests);
+
+  Future<String> m3u8(String adamId);
+
+  Future<String> lyrics({
+    required String adamId,
+    required String region,
+    required String language,
+  });
+
+  Future<String> license({
+    required String adamId,
+    required String challenge,
+    required String uri,
+  });
+
+  Future<String> webPlayback(String adamId);
+}
+
+final class GrpcManagerTransport
+    implements ManagerTransport, ManagerMediaTransport {
   GrpcManagerTransport(ManagerEndpoint endpoint)
       : _channel = grpc.ClientChannel(
           endpoint.host,
@@ -163,15 +184,18 @@ final class GrpcManagerTransport implements ManagerTransport {
     _checkHeader(reply.header);
   }
 
+  @override
   Stream<DecryptReply> decrypt(Stream<DecryptRequest> requests) =>
       _stub.decrypt(requests);
 
+  @override
   Future<String> m3u8(String adamId) async {
     final reply = await _stub.m3u8(M3U8Request(adamId: adamId));
     _checkHeader(reply.header);
     return reply.m3u8;
   }
 
+  @override
   Future<String> lyrics({
     required String adamId,
     required String region,
@@ -186,6 +210,7 @@ final class GrpcManagerTransport implements ManagerTransport {
     return reply.lyrics;
   }
 
+  @override
   Future<String> license({
     required String adamId,
     required String challenge,
@@ -200,6 +225,7 @@ final class GrpcManagerTransport implements ManagerTransport {
     return reply.license;
   }
 
+  @override
   Future<String> webPlayback(String adamId) async {
     final reply = await _stub.webPlayback(WebPlaybackRequest(adamId: adamId));
     _checkHeader(reply.header);

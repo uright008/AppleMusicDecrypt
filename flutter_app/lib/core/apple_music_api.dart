@@ -2,6 +2,30 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+abstract interface class AppleMusicDataSource {
+  Future<Map<String, dynamic>?> getSongInfo({
+    required String songId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<Map<String, dynamic>> getAlbumInfo({
+    required String albumId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<List<int>> getCover(
+    String templateUrl, {
+    required String format,
+    required String size,
+  });
+
+  Future<String> downloadM3u8(String url);
+
+  Future<String> resolveUrl(String url);
+}
+
 final class AppleMusicApiException implements Exception {
   const AppleMusicApiException(this.message);
 
@@ -12,7 +36,7 @@ final class AppleMusicApiException implements Exception {
 }
 
 /// Dart port of the HTTP/catalog responsibilities in upstream `src/api.py`.
-final class AppleMusicApi {
+final class AppleMusicApi implements AppleMusicDataSource {
   AppleMusicApi._({required http.Client client, required String token})
       : _client = client,
         _headers = {
