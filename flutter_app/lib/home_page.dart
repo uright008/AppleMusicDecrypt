@@ -7,6 +7,7 @@ import 'api_client.dart';
 import 'models.dart';
 
 const _defaultApiUrl = 'http://127.0.0.1:10020';
+const _addAccountAction = '\u0000add-account';
 const _codecs = <String>[
   'alac',
   'ec3',
@@ -50,6 +51,7 @@ class _HomePageState extends State<HomePage> {
   bool _force = false;
   bool _includeParticipateSongs = false;
   bool _submitting = false;
+  bool _authenticating = false;
   ServerStatus? _serverStatus;
   TaskSnapshot _snapshot = const TaskSnapshot(
     tasks: [],
@@ -171,6 +173,174 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<bool> _confirmCredentialTransport(ApiClient api) async {
+    if (api.credentialsTransportIsProtected) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('连接未加密'),
+        content: const Text(
+          '当前后端使用远程 HTTP，Apple ID 密码和验证码会以明文经过网络。'
+          '你已选择允许此模式，但建议尽快改用本机地址或 HTTPS。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('继续登录'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _showAccounts() async {
+    final api = _api;
+    if (api == null) return;
+    setState(() => _authenticating = true);
+    AuthResult auth;
+    try {
+      auth = await api.authStatus();
+    } catch (error) {
+      _showMessage(error.toString());
+      return;
+    } finally {
+      if (mounted) setState(() => _authenticating = false);
+    }
+    if (!mounted) return;
+    if (auth.authenticatedUsers.isEmpty) {
+      await _login();
+      return;
+    }
+    final selection = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Apple Music 账号'),
+        children: [
+          ...auth.authenticatedUsers.map(
+            (username) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, username),
+              child: Row(
+                children: [
+                  const Icon(Icons.account_circle_outlined),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      username,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.logout),
+                ],
+              ),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, _addAccountAction),
+            child: const Row(
+              children: [
+                Icon(Icons.person_add_alt_1),
+                SizedBox(width: 12),
+                Text('登录其他账号'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || selection == null) return;
+    if (selection == _addAccountAction) {
+      await _login();
+    } else {
+      await _logout(selection);
+    }
+  }
+
+  Future<void> _login() async {
+    final api = _api;
+    if (api == null || !await _confirmCredentialTransport(api) || !mounted) {
+      return;
+    }
+    final credentials = await showDialog<_Credentials>(
+      context: context,
+      builder: (context) => const _CredentialsDialog(),
+    );
+    if (!mounted || credentials == null) return;
+
+    setState(() => _authenticating = true);
+    try {
+      var result = await api.login(
+        username: credentials.username,
+        password: credentials.password,
+      );
+      if (!mounted) return;
+      if (result.requiresTwoFactor) {
+        setState(() => _authenticating = false);
+        final code = await showDialog<String>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) =>
+              _TwoFactorDialog(username: credentials.username),
+        );
+        if (!mounted || code == null) return;
+        setState(() => _authenticating = true);
+        result = await api.login(
+          username: credentials.username,
+          password: credentials.password,
+          twoFactorCode: code,
+        );
+      }
+      if (!mounted) return;
+      if (result.isAuthenticated) {
+        _showMessage('登录成功：${credentials.username}');
+        await _refresh();
+      } else {
+        _showMessage('登录未完成');
+      }
+    } catch (error) {
+      _showMessage(error.toString());
+    } finally {
+      if (mounted) setState(() => _authenticating = false);
+    }
+  }
+
+  Future<void> _logout(String username) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('退出登录'),
+        content: Text('确定从 wrapper-manager 登出 $username？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('登出'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    setState(() => _authenticating = true);
+    try {
+      await _api!.logout(username);
+      _showMessage('已登出：$username');
+      await _refresh();
+    } catch (error) {
+      _showMessage(error.toString());
+    } finally {
+      if (mounted) setState(() => _authenticating = false);
+    }
+  }
+
   Future<void> _editSettings() async {
     final next = await showDialog<String>(
       context: context,
@@ -207,14 +377,26 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final authenticated =
+        _serverStatus?.authenticatedUsers.isNotEmpty == true;
     return Scaffold(
       appBar: AppBar(
         title: const Text('AppleMusicDecrypt'),
         actions: [
           IconButton(
-            tooltip: '刷新',
-            onPressed: _refresh,
-            icon: const Icon(Icons.refresh),
+            tooltip: authenticated ? 'Apple Music 账号' : 'Apple Music 登录',
+            onPressed: _serverStatus?.ready == true && !_authenticating
+                ? _showAccounts
+                : null,
+            icon: _authenticating
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Badge(
+                    isLabelVisible: authenticated,
+                    child: const Icon(Icons.account_circle_outlined),
+                  ),
           ),
           IconButton(
             tooltip: '设置',
@@ -354,6 +536,156 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _Credentials {
+  const _Credentials({required this.username, required this.password});
+
+  final String username;
+  final String password;
+}
+
+class _CredentialsDialog extends StatefulWidget {
+  const _CredentialsDialog();
+
+  @override
+  State<_CredentialsDialog> createState() => _CredentialsDialogState();
+}
+
+class _CredentialsDialogState extends State<_CredentialsDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _obscurePassword = true;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState?.validate() != true) return;
+    Navigator.pop(
+      context,
+      _Credentials(
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: const Text('Apple Music 登录'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              controller: _usernameController,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              autofillHints: const [AutofillHints.username],
+              decoration: const InputDecoration(labelText: 'Apple ID'),
+              validator: (value) => value?.trim().isEmpty == true
+                  ? '请输入 Apple ID'
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              autofillHints: const [AutofillHints.password],
+              onFieldSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: '密码',
+                suffixIcon: IconButton(
+                  tooltip: _obscurePassword ? '显示密码' : '隐藏密码',
+                  onPressed: () => setState(
+                    () => _obscurePassword = !_obscurePassword,
+                  ),
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                  ),
+                ),
+              ),
+              validator: (value) => value?.isEmpty == true ? '请输入密码' : null,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '凭据仅用于当前请求，不会由本应用保存。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('登录')),
+      ],
+    );
+  }
+}
+
+class _TwoFactorDialog extends StatefulWidget {
+  const _TwoFactorDialog({required this.username});
+
+  final String username;
+
+  @override
+  State<_TwoFactorDialog> createState() => _TwoFactorDialogState();
+}
+
+class _TwoFactorDialogState extends State<_TwoFactorDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final code = _controller.text.trim();
+    if (code.isNotEmpty) Navigator.pop(context, code);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('双重认证'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          labelText: '验证码',
+          helperText: widget.username,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('验证')),
+      ],
     );
   }
 }
