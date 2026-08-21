@@ -290,10 +290,9 @@ class _HomePageState extends State<HomePage> {
         );
         if (!mounted || code == null) return;
         setState(() => _authenticating = true);
-        result = await api.login(
+        result = await api.submitTwoFactor(
           username: credentials.username,
-          password: credentials.password,
-          twoFactorCode: code,
+          code: code,
         );
       }
       if (!mounted) return;
@@ -666,26 +665,25 @@ class _TwoFactorDialogState extends State<_TwoFactorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('双重认证'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        keyboardType: TextInputType.number,
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _submit(),
-        decoration: InputDecoration(
-          labelText: '验证码',
-          helperText: widget.username,
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        title: const Text('双重认证'),
+        content: TextField(
+          controller: _controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _submit(),
+          decoration: InputDecoration(
+            labelText: '验证码',
+            helperText: widget.username,
+          ),
         ),
+        actions: [
+          FilledButton(onPressed: _submit, child: const Text('验证')),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('验证')),
-      ],
     );
   }
 }
