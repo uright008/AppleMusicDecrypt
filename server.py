@@ -27,7 +27,7 @@ add_creator(ConfigCreator)
 from src.api import APICreator, WebAPI
 
 add_creator(APICreator)
-from src.grpc.manager import WMCreator, WrapperManager
+from src.grpc.manager import WMCreator, WrapperManager, WrapperManagerException
 
 add_creator(WMCreator)
 from src.measurer import Measurer, MeasurerCreator
@@ -73,6 +73,28 @@ class DownloadRequest(BaseModel):
         return value
 
 
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+    two_factor_code: Optional[str] = Field(default=None, max_length=32)
+
+    @field_validator("username")
+    @classmethod
+    def strip_username(cls, value: str) -> str:
+        username = value.strip()
+        if not username:
+            raise ValueError("Username is required")
+        return username
+
+    @field_validator("two_factor_code")
+    @classmethod
+    def strip_two_factor_code(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        code = value.strip()
+        return code or None
+
+
 class ServerState:
     def __init__(self) -> None:
         self.ripper: Optional[Ripper] = None
@@ -80,6 +102,7 @@ class ServerState:
         self.dispatch_tasks: set[asyncio.Task] = set()
         self.history: deque[dict[str, Any]] = deque(maxlen=200)
         self.cancelled_ids: set[str] = set()
+        self.authenticated_users: set[str] = set()
 
     async def start(self) -> None:
         self.ripper = Ripper()
@@ -231,9 +254,75 @@ async def health() -> dict[str, Any]:
             "ready": status.ready,
             "regions": list(status.regions),
             "manager": it(Config).instance.url,
+            "authenticatedUsers": sorted(state.authenticated_users),
         }
     except grpc.aio.AioRpcError as exc:
         raise HTTPException(status_code=503, detail="wrapper-manager is unavailable") from exc
+
+
+@app.get("/api/v1/auth")
+async def auth_status() -> dict[str, Any]:
+    return {
+        "status": "authenticated" if state.authenticated_users else "signed_out",
+        "authenticatedUsers": sorted(state.authenticated_users),
+    }
+
+
+@app.post("/api/v1/auth/login")
+async def login(request: AuthLoginRequest) -> dict[str, Any]:
+    two_factor_requested = False
+
+    async def on_two_factor(_: str, __: str) -> str:
+        nonlocal two_factor_requested
+        two_factor_requested = True
+        return request.two_factor_code or ""
+
+    try:
+        await it(WrapperManager).login(
+            request.username, request.password, on_two_factor
+        )
+    except WrapperManagerException as exc:
+        if two_factor_requested and not request.two_factor_code:
+            return {
+                "status": "requires_2fa",
+                "username": request.username,
+                "authenticatedUsers": sorted(state.authenticated_users),
+            }
+        raise HTTPException(
+            status_code=401, detail=exc.msg or "Apple Music login failed"
+        ) from exc
+    except grpc.aio.AioRpcError as exc:
+        raise HTTPException(
+            status_code=503, detail="wrapper-manager is unavailable"
+        ) from exc
+
+    state.authenticated_users.add(request.username)
+    return {
+        "status": "authenticated",
+        "username": request.username,
+        "authenticatedUsers": sorted(state.authenticated_users),
+    }
+
+
+@app.delete("/api/v1/auth/{username}")
+async def logout(username: str) -> dict[str, Any]:
+    try:
+        await it(WrapperManager).logout(username)
+    except WrapperManagerException as exc:
+        raise HTTPException(
+            status_code=400, detail=exc.msg or "Apple Music logout failed"
+        ) from exc
+    except grpc.aio.AioRpcError as exc:
+        raise HTTPException(
+            status_code=503, detail="wrapper-manager is unavailable"
+        ) from exc
+
+    state.authenticated_users.discard(username)
+    return {
+        "status": "authenticated" if state.authenticated_users else "signed_out",
+        "username": username,
+        "authenticatedUsers": sorted(state.authenticated_users),
+    }
 
 
 @app.post("/api/v1/downloads", status_code=202)
