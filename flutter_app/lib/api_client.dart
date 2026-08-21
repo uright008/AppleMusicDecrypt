@@ -412,7 +412,9 @@ final class ApiClient {
     if (mediaManager is! ManagerMediaTransport) {
       throw const ApiException('当前 manager transport 不支持媒体 RPC');
     }
-    final initialization = _initializeNativePipeline(mediaManager);
+    final initialization = _initializeNativePipeline(
+      mediaManager as ManagerMediaTransport,
+    );
     _nativeInitialization = initialization;
     try {
       await initialization;
