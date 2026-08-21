@@ -31,3 +31,8 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AppleMusicDecrypt-Android-debug
+          path: flutter_app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
