@@ -71,8 +71,9 @@ loopback port.
 
 Use the account button in the app bar to log in, complete 2FA, list accounts
 logged in during the current backend process, and log out. Passwords and 2FA
-codes are kept only for the active request and are not persisted by the app or
-FastAPI server.
+codes are kept only for the active login flow and are not persisted by the app
+or FastAPI server. The bridge pauses and resumes the existing upstream gRPC
+login stream; files under `src/grpc/` remain unchanged.
 
 Remote plain HTTP is supported when explicitly confirmed in the warning dialog,
 but Apple ID credentials and verification codes will cross the network without
