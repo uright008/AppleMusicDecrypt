@@ -27,7 +27,14 @@ const _languages = <String>[
 ];
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  const HomePage({
+    super.key,
+    this.initialApiUrl,
+    this.onApiUrlChanged,
+  });
+
+  final String? initialApiUrl;
+  final Future<void> Function(String value)? onApiUrlChanged;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -62,18 +69,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadSettings() async {
-    final prefs = SharedPreferencesAsync();
-    final savedApiUrl = await prefs.getString('apiUrl') ?? _defaultApiUrl;
+    final savedApiUrl = widget.initialApiUrl ??
+        await SharedPreferencesAsync().getString('apiUrl') ??
+        _defaultApiUrl;
     if (!mounted) return;
     try {
       _replaceApi(savedApiUrl);
     } on FormatException {
       _replaceApi(_defaultApiUrl);
-      await prefs.setString('apiUrl', _defaultApiUrl);
+      await _persistApiUrl(_defaultApiUrl);
     }
     await _refresh();
     if (!mounted) return;
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+  }
+
+  Future<void> _persistApiUrl(String value) async {
+    final onApiUrlChanged = widget.onApiUrlChanged;
+    if (onApiUrlChanged != null) {
+      await onApiUrlChanged(value);
+      return;
+    }
+    await SharedPreferencesAsync().setString('apiUrl', value);
   }
 
   void _replaceApi(String value) {
@@ -166,7 +183,7 @@ class _HomePageState extends State<HomePage> {
         _serverStatus = null;
         _connectionError = null;
       });
-      await SharedPreferencesAsync().setString('apiUrl', _apiUrl);
+      await _persistApiUrl(_apiUrl);
       await _refresh();
     } on FormatException catch (error) {
       _showMessage(error.message);
