@@ -25,11 +25,11 @@ No FastAPI control plane is used by these calls.
 
 | Python v2 module | Android implementation | State |
 | --- | --- | --- |
-| `src/grpc/manager.py` | Dart gRPC transport and proto wire models | Status/login/logout complete; decrypt stream foundation complete |
+| `src/grpc/manager.py` | Dart gRPC transport, long-lived decrypt session and proto wire models | Complete for all upstream RPCs |
 | `src/url.py` | `core/apple_music_url.dart` | Complete |
-| `src/api.py` | Dart Apple Music catalog/download client | In progress |
-| `src/task.py`, `src/rip.py` | Dart task queue and rip coordinator | Pending |
-| `src/mp4.py` | Android native media layer | Pending |
+| `src/api.py` | Dart Apple Music catalog/download client | Complete for current rip path |
+| `src/task.py`, `src/rip.py` | Bounded Dart queue, container expansion and preparation pipeline | Complete through ordered sample decryption |
+| `src/mp4.py` | Dart HLS selector and fragmented MP4 sample parser | Extraction complete; re-encapsulation pending |
 | `src/metadata.py`, `src/save.py` | Dart metadata and Android MediaStore output | Pending |
 
 The download button stays disabled until the local rip path is usable. This is
@@ -39,10 +39,11 @@ download/remux pipeline.
 ## Native media boundary
 
 Upstream shells out to GPAC/MP4Box, Bento4, and FFmpeg for fragmented MP4 sample
-extraction, remuxing, metadata, and validation. Android cannot spawn those
-desktop commands from a normal Flutter APK. That part must be implemented as a
-maintained Android native library/JNI layer (or an equivalent ISO-BMFF
-implementation) before the standalone APK is feature-complete.
+extraction, remuxing, metadata, and validation. HLS selection and the common
+`moof/traf/tfhd/trun/mdat` sample-extraction path are now implemented in pure
+Dart. The remaining boundary is rebuilding playable M4A containers, writing
+metadata, saving through Android MediaStore, and integrity validation. Those
+parts can use additional ISO-BMFF code or a maintained Android native/JNI layer.
 
 ## Build
 

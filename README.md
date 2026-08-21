@@ -99,10 +99,12 @@ Some audio files provided by Apple Music are incorrectly encoded to a higher bit
 
 ## Flutter Android client
 
-A Material 3 Flutter client and a loopback-only HTTP control plane are available
-on the Android feature branch. The initial Android release reuses the upstream
-Python v2 core running in Termux, including its existing native media tools,
-rather than duplicating the media pipeline in Dart.
+A Material 3 Flutter client is being built as a native Dart/Android port of
+the Python v2 core. It connects directly to wrapper-manager gRPC; status,
+login/2FA, URL/catalog handling, HLS selection, bounded task expansion,
+fragmented MP4 sample extraction, and ordered sample decryption are implemented
+without the FastAPI control plane. M4A re-encapsulation, metadata, MediaStore
+saving, and integrity validation remain in progress.
 
 See [docs/android-flutter.md](docs/android-flutter.md) for installation, build,
 security and architecture details.
