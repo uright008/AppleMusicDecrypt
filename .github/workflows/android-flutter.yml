@@ -5,13 +5,11 @@ on:
     paths:
       - "flutter_app/**"
       - ".github/workflows/android-flutter.yml"
-      - "server.py"
   push:
     branches: [v2]
     paths:
       - "flutter_app/**"
       - ".github/workflows/android-flutter.yml"
-      - "server.py"
   workflow_dispatch:
 
 permissions:
@@ -38,7 +36,6 @@ jobs:
         with:
           cache-provider: basic
           cache-read-only: false
-      - run: python3 -m py_compile ../server.py
       - run: flutter pub get
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
