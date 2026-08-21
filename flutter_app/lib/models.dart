@@ -3,6 +3,7 @@ class ServerStatus {
     required this.ready,
     required this.regions,
     required this.manager,
+    required this.authenticatedUsers,
   });
 
   factory ServerStatus.fromJson(Map<String, dynamic> json) => ServerStatus(
@@ -11,11 +12,40 @@ class ServerStatus {
             .map((item) => item.toString())
             .toList(growable: false),
         manager: json['manager']?.toString() ?? '',
+        authenticatedUsers:
+            (json['authenticatedUsers'] as List<dynamic>? ?? const [])
+                .map((item) => item.toString())
+                .toList(growable: false),
       );
 
   final bool ready;
   final List<String> regions;
   final String manager;
+  final List<String> authenticatedUsers;
+}
+
+class AuthResult {
+  const AuthResult({
+    required this.status,
+    required this.authenticatedUsers,
+    this.username,
+  });
+
+  factory AuthResult.fromJson(Map<String, dynamic> json) => AuthResult(
+        status: json['status']?.toString() ?? 'signed_out',
+        username: json['username']?.toString(),
+        authenticatedUsers:
+            (json['authenticatedUsers'] as List<dynamic>? ?? const [])
+                .map((item) => item.toString())
+                .toList(growable: false),
+      );
+
+  final String status;
+  final String? username;
+  final List<String> authenticatedUsers;
+
+  bool get requiresTwoFactor => status == 'requires_2fa';
+  bool get isAuthenticated => status == 'authenticated';
 }
 
 class DownloadTask {
