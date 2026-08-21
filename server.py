@@ -453,7 +453,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the AppleMusicDecrypt local API")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=10020, type=int)
+    parser.add_argument(
+        "--manager-url",
+        help="Override the wrapper-manager gRPC host:port from config.toml",
+    )
+    manager_security = parser.add_mutually_exclusive_group()
+    manager_security.add_argument(
+        "--manager-secure", dest="manager_secure", action="store_true"
+    )
+    manager_security.add_argument(
+        "--manager-insecure", dest="manager_secure", action="store_false"
+    )
+    parser.set_defaults(manager_secure=None)
     args = parser.parse_args()
+    if args.manager_url:
+        it(Config).instance.url = args.manager_url
+    if args.manager_secure is not None:
+        it(Config).instance.secure = args.manager_secure
     uvicorn.run(app, host=args.host, port=args.port, reload=False)
 
 
