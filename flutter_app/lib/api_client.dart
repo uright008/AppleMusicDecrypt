@@ -67,17 +67,26 @@ class ApiClient {
   Future<AuthResult> login({
     required String username,
     required String password,
-    String? twoFactorCode,
   }) async {
     final response = await _client
         .post(
           _uri('/api/v1/auth/login'),
           headers: const {'content-type': 'application/json'},
-          body: jsonEncode({
-            'username': username,
-            'password': password,
-            if (twoFactorCode != null) 'two_factor_code': twoFactorCode,
-          }),
+          body: jsonEncode({'username': username, 'password': password}),
+        )
+        .timeout(const Duration(seconds: 55));
+    return AuthResult.fromJson(_decode(response));
+  }
+
+  Future<AuthResult> submitTwoFactor({
+    required String username,
+    required String code,
+  }) async {
+    final response = await _client
+        .post(
+          _uri('/api/v1/auth/2fa'),
+          headers: const {'content-type': 'application/json'},
+          body: jsonEncode({'username': username, 'code': code}),
         )
         .timeout(const Duration(seconds: 70));
     return AuthResult.fromJson(_decode(response));
