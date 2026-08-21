@@ -40,15 +40,16 @@ final class ProtoWriter {
   }
 
   void _varint(int value) {
-    var current = value;
-    if (current < 0) {
-      current = current.toUnsigned(64);
+    var current = BigInt.from(value);
+    if (current.isNegative) {
+      current += BigInt.one << 64;
     }
-    while (current > 0x7f) {
-      _bytes.addByte((current & 0x7f) | 0x80);
+    final mask = BigInt.from(0x7f);
+    while (current > mask) {
+      _bytes.addByte(((current & mask).toInt()) | 0x80);
       current >>= 7;
     }
-    _bytes.addByte(current);
+    _bytes.addByte(current.toInt());
   }
 
   Uint8List takeBytes() => _bytes.takeBytes();
@@ -68,12 +69,12 @@ final class ProtoReader {
   }
 
   int readVarint() {
-    var value = 0;
+    var value = BigInt.zero;
     var shift = 0;
     while (_offset < _bytes.length && shift < 70) {
       final byte = _bytes[_offset++];
-      value |= (byte & 0x7f) << shift;
-      if ((byte & 0x80) == 0) return value;
+      value |= BigInt.from(byte & 0x7f) << shift;
+      if ((byte & 0x80) == 0) return value.toSigned(64).toInt();
       shift += 7;
     }
     throw const FormatException('Invalid protobuf varint');

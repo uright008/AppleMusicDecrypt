@@ -426,3 +426,235 @@ final class DecryptReply implements ProtoMessage {
     return writer.takeBytes();
   }
 }
+
+final class M3U8Request implements ProtoMessage {
+  const M3U8Request({required this.adamId});
+
+  final String adamId;
+
+  @override
+  Uint8List writeToBuffer() => _adamIdRequest(adamId);
+}
+
+final class M3U8Reply {
+  const M3U8Reply({
+    this.header = const ReplyHeader(),
+    this.adamId = '',
+    this.m3u8 = '',
+  });
+
+  factory M3U8Reply.fromBuffer(List<int> bytes) {
+    final envelope = _ReplyEnvelope.fromBuffer(bytes);
+    final data = _StringPair.fromBuffer(envelope.data);
+    return M3U8Reply(
+      header: envelope.header,
+      adamId: data.first,
+      m3u8: data.second,
+    );
+  }
+
+  final ReplyHeader header;
+  final String adamId;
+  final String m3u8;
+}
+
+final class LyricsRequest implements ProtoMessage {
+  const LyricsRequest({
+    required this.adamId,
+    required this.region,
+    required this.language,
+  });
+
+  final String adamId;
+  final String region;
+  final String language;
+
+  @override
+  Uint8List writeToBuffer() {
+    final data = ProtoWriter()
+      ..stringField(1, adamId)
+      ..stringField(2, region)
+      ..stringField(3, language);
+    final request = ProtoWriter()..messageField(1, data.takeBytes());
+    return request.takeBytes();
+  }
+}
+
+final class LyricsReply {
+  const LyricsReply({
+    this.header = const ReplyHeader(),
+    this.adamId = '',
+    this.lyrics = '',
+  });
+
+  factory LyricsReply.fromBuffer(List<int> bytes) {
+    final envelope = _ReplyEnvelope.fromBuffer(bytes);
+    final data = _StringPair.fromBuffer(envelope.data);
+    return LyricsReply(
+      header: envelope.header,
+      adamId: data.first,
+      lyrics: data.second,
+    );
+  }
+
+  final ReplyHeader header;
+  final String adamId;
+  final String lyrics;
+}
+
+final class LicenseRequest implements ProtoMessage {
+  const LicenseRequest({
+    required this.adamId,
+    required this.challenge,
+    required this.uri,
+  });
+
+  final String adamId;
+  final String challenge;
+  final String uri;
+
+  @override
+  Uint8List writeToBuffer() {
+    final data = ProtoWriter()
+      ..stringField(1, adamId)
+      ..stringField(2, challenge)
+      ..stringField(3, uri);
+    final request = ProtoWriter()..messageField(1, data.takeBytes());
+    return request.takeBytes();
+  }
+}
+
+final class LicenseReply {
+  const LicenseReply({
+    this.header = const ReplyHeader(),
+    this.adamId = '',
+    this.license = '',
+    this.renew = 0,
+  });
+
+  factory LicenseReply.fromBuffer(List<int> bytes) {
+    final envelope = _ReplyEnvelope.fromBuffer(bytes);
+    final reader = ProtoReader(envelope.data);
+    var adamId = '';
+    var license = '';
+    var renew = 0;
+    while (!reader.isDone) {
+      final tag = reader.readTag();
+      switch (tag.field) {
+        case 1:
+          adamId = reader.readString();
+          break;
+        case 2:
+          license = reader.readString();
+          break;
+        case 3:
+          renew = reader.readVarint();
+          break;
+        default:
+          reader.skip(tag.wire);
+      }
+    }
+    return LicenseReply(
+      header: envelope.header,
+      adamId: adamId,
+      license: license,
+      renew: renew,
+    );
+  }
+
+  final ReplyHeader header;
+  final String adamId;
+  final String license;
+  final int renew;
+}
+
+final class WebPlaybackRequest implements ProtoMessage {
+  const WebPlaybackRequest({required this.adamId});
+
+  final String adamId;
+
+  @override
+  Uint8List writeToBuffer() => _adamIdRequest(adamId);
+}
+
+final class WebPlaybackReply {
+  const WebPlaybackReply({
+    this.header = const ReplyHeader(),
+    this.adamId = '',
+    this.m3u8 = '',
+  });
+
+  factory WebPlaybackReply.fromBuffer(List<int> bytes) {
+    final envelope = _ReplyEnvelope.fromBuffer(bytes);
+    final data = _StringPair.fromBuffer(envelope.data);
+    return WebPlaybackReply(
+      header: envelope.header,
+      adamId: data.first,
+      m3u8: data.second,
+    );
+  }
+
+  final ReplyHeader header;
+  final String adamId;
+  final String m3u8;
+}
+
+Uint8List _adamIdRequest(String adamId) {
+  final data = ProtoWriter()..stringField(1, adamId);
+  final request = ProtoWriter()..messageField(1, data.takeBytes());
+  return request.takeBytes();
+}
+
+final class _ReplyEnvelope {
+  const _ReplyEnvelope({required this.header, required this.data});
+
+  factory _ReplyEnvelope.fromBuffer(List<int> bytes) {
+    final reader = ProtoReader(bytes);
+    var header = const ReplyHeader();
+    Uint8List data = Uint8List(0);
+    while (!reader.isDone) {
+      final tag = reader.readTag();
+      switch (tag.field) {
+        case 1:
+          header = ReplyHeader.fromBuffer(reader.readBytes());
+          break;
+        case 2:
+          data = reader.readBytes();
+          break;
+        default:
+          reader.skip(tag.wire);
+      }
+    }
+    return _ReplyEnvelope(header: header, data: data);
+  }
+
+  final ReplyHeader header;
+  final Uint8List data;
+}
+
+final class _StringPair {
+  const _StringPair(this.first, this.second);
+
+  factory _StringPair.fromBuffer(List<int> bytes) {
+    final reader = ProtoReader(bytes);
+    var first = '';
+    var second = '';
+    while (!reader.isDone) {
+      final tag = reader.readTag();
+      switch (tag.field) {
+        case 1:
+          first = reader.readString();
+          break;
+        case 2:
+          second = reader.readString();
+          break;
+        default:
+          reader.skip(tag.wire);
+      }
+    }
+    return _StringPair(first, second);
+  }
+
+  final String first;
+  final String second;
+}

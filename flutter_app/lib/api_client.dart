@@ -163,6 +163,49 @@ final class GrpcManagerTransport implements ManagerTransport {
     _checkHeader(reply.header);
   }
 
+  Stream<DecryptReply> decrypt(Stream<DecryptRequest> requests) =>
+      _stub.decrypt(requests);
+
+  Future<String> m3u8(String adamId) async {
+    final reply = await _stub.m3u8(M3U8Request(adamId: adamId));
+    _checkHeader(reply.header);
+    return reply.m3u8;
+  }
+
+  Future<String> lyrics({
+    required String adamId,
+    required String region,
+    required String language,
+  }) async {
+    final reply = await _stub.lyrics(LyricsRequest(
+      adamId: adamId,
+      region: region,
+      language: language,
+    ));
+    _checkHeader(reply.header);
+    return reply.lyrics;
+  }
+
+  Future<String> license({
+    required String adamId,
+    required String challenge,
+    required String uri,
+  }) async {
+    final reply = await _stub.license(LicenseRequest(
+      adamId: adamId,
+      challenge: challenge,
+      uri: uri,
+    ));
+    _checkHeader(reply.header);
+    return reply.license;
+  }
+
+  Future<String> webPlayback(String adamId) async {
+    final reply = await _stub.webPlayback(WebPlaybackRequest(adamId: adamId));
+    _checkHeader(reply.header);
+    return reply.m3u8;
+  }
+
   void _checkHeader(ReplyHeader header) {
     if (header.code != 0) {
       throw ApiException(
