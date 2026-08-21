@@ -23,7 +23,9 @@ final class _FakeManagerTransport implements ManagerTransport {
       twoFactorCode;
 
   @override
-  Future<void> logout(String username) async => loggedOut = username;
+  Future<void> logout(String username) async {
+    loggedOut = username;
+  }
 
   @override
   Future<void> close() async {}

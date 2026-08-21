@@ -33,10 +33,12 @@ class HomePage extends StatefulWidget {
     super.key,
     this.initialApiUrl,
     this.onApiUrlChanged,
+    this.apiFactory,
   });
 
   final String? initialApiUrl;
   final Future<void> Function(String value)? onApiUrlChanged;
+  final ApiClient Function(String value)? apiFactory;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -97,7 +99,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _replaceApi(String value) {
-    final nextApi = ApiClient(baseUrl: value);
+    final nextApi = widget.apiFactory?.call(value) ?? ApiClient(baseUrl: value);
     final previousApi = _api;
     _api = nextApi;
     _apiUrl = nextApi.baseUrl;
