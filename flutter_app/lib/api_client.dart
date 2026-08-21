@@ -25,13 +25,23 @@ class ApiClient {
   static String _normalizeBaseUrl(String value) {
     final normalized = value.trim().replaceFirst(RegExp(r'/+$'), '');
     final uri = Uri.tryParse(normalized);
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      throw const FormatException('请输入完整的 API 地址');
+    if (uri == null ||
+        !{'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
+        uri.host.isEmpty) {
+      throw const FormatException('请输入完整的 HTTP 或 HTTPS API 地址');
     }
     return normalized;
   }
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
+
+  bool get credentialsTransportIsProtected {
+    final uri = Uri.parse(baseUrl);
+    return uri.scheme == 'https' ||
+        uri.host == '127.0.0.1' ||
+        uri.host == 'localhost' ||
+        uri.host == '::1';
+  }
 
   Future<ServerStatus> health() async {
     final response = await _client
@@ -45,6 +55,40 @@ class ApiClient {
         .get(_uri('/api/v1/tasks'))
         .timeout(const Duration(seconds: 8));
     return TaskSnapshot.fromJson(_decode(response));
+  }
+
+  Future<AuthResult> authStatus() async {
+    final response = await _client
+        .get(_uri('/api/v1/auth'))
+        .timeout(const Duration(seconds: 8));
+    return AuthResult.fromJson(_decode(response));
+  }
+
+  Future<AuthResult> login({
+    required String username,
+    required String password,
+    String? twoFactorCode,
+  }) async {
+    final response = await _client
+        .post(
+          _uri('/api/v1/auth/login'),
+          headers: const {'content-type': 'application/json'},
+          body: jsonEncode({
+            'username': username,
+            'password': password,
+            if (twoFactorCode != null) 'two_factor_code': twoFactorCode,
+          }),
+        )
+        .timeout(const Duration(seconds: 70));
+    return AuthResult.fromJson(_decode(response));
+  }
+
+  Future<AuthResult> logout(String username) async {
+    final encodedUsername = Uri.encodeComponent(username);
+    final response = await _client
+        .delete(_uri('/api/v1/auth/$encodedUsername'))
+        .timeout(const Duration(seconds: 20));
+    return AuthResult.fromJson(_decode(response));
   }
 
   Future<void> enqueue({
