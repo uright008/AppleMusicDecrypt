@@ -1,16 +1,9 @@
 import 'package:applemusicdecrypt_android/home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  setUp(() {
-    SharedPreferences.setMockInitialValues({
-      'apiUrl': 'http://127.0.0.1:1',
-    });
-  });
 
   testWidgets('download controls do not overflow on a narrow screen',
       (tester) async {
@@ -20,7 +13,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      const MaterialApp(home: HomePage()),
+      MaterialApp(
+        home: HomePage(
+          initialApiUrl: 'http://127.0.0.1:1',
+          onApiUrlChanged: (_) async {},
+        ),
+      ),
     );
     await tester.pump();
 
@@ -38,7 +36,12 @@ void main() {
   testWidgets('backend URL dialog closes without a lifecycle assertion',
       (tester) async {
     await tester.pumpWidget(
-      const MaterialApp(home: HomePage()),
+      MaterialApp(
+        home: HomePage(
+          initialApiUrl: 'http://127.0.0.1:1',
+          onApiUrlChanged: (_) async {},
+        ),
+      ),
     );
     await tester.pump();
 
