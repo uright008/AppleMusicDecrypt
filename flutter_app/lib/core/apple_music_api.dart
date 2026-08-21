@@ -56,6 +56,8 @@ abstract interface class AppleMusicDataSource {
     required String size,
   });
 
+  Future<List<int>> downloadBytes(String url);
+
   Future<String> downloadM3u8(String url);
 
   Future<String> resolveUrl(String url);
@@ -256,6 +258,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
     return downloadBytes(url);
   }
 
+  @override
   Future<List<int>> downloadBytes(String url) async {
     final response = await _client.get(Uri.parse(url));
     _ensureSuccess(response);

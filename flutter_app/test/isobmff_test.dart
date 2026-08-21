@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 Uint8List _box(String type, List<int> payload) {
   final result = Uint8List(8 + payload.length);
-  final data = ByteData.sublistView(result)..setUint32(0, result.length);
+  ByteData.sublistView(result).setUint32(0, result.length);
   result.setRange(4, 8, type.codeUnits);
   result.setRange(8, result.length, payload);
   return result;

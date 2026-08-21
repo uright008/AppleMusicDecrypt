@@ -34,9 +34,14 @@ final class FragmentedSong {
 
 /// ISO-BMFF fragment parser replacing the sample-extraction portion of the
 /// GPAC/MP4Box subprocess path in upstream `src.mp4.extract_song`.
-final class FragmentedMp4Extractor {
+abstract interface class SampleExtractor {
+  FragmentedSong extract(Uint8List raw, AudioCodec codec);
+}
+
+final class FragmentedMp4Extractor implements SampleExtractor {
   const FragmentedMp4Extractor();
 
+  @override
   FragmentedSong extract(Uint8List raw, AudioCodec codec) {
     final topLevel = parseBoxes(raw);
     final samples = <EncryptedSample>[];
@@ -63,12 +68,14 @@ final class FragmentedMp4Extractor {
         var implicitOffset = followingMdat?.payloadOffset;
         for (final trunBox in children.where((box) => box.type == 'trun')) {
           final trun = _parseTrun(raw, trunBox, tfhd);
-          var sampleOffset = trun.dataOffset == null
+          final explicitOffset = trun.dataOffset;
+          final initialOffset = explicitOffset == null
               ? implicitOffset
-              : (tfhd.baseDataOffset ?? moof.offset) + trun.dataOffset!;
-          if (sampleOffset == null) {
+              : (tfhd.baseDataOffset ?? moof.offset) + explicitOffset;
+          if (initialOffset == null) {
             throw const FormatException('Cannot resolve fragment sample offset');
           }
+          var sampleOffset = initialOffset;
           for (final entry in trun.entries) {
             final sampleEnd = sampleOffset + entry.size;
             if (sampleOffset < 0 || sampleEnd > raw.length) {

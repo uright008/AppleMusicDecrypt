@@ -35,6 +35,11 @@ final class M3u8Info {
   final String codecId;
   final int? bitDepth;
   final int? sampleRate;
+
+  AudioCodec get codec => AudioCodec.values.firstWhere(
+        (candidate) => M3u8Resolver._codecPattern(candidate).hasMatch(codecId),
+        orElse: () => throw FormatException('Unknown codec group: $codecId'),
+      );
 }
 
 final class CodecNotFoundException implements Exception {

@@ -21,6 +21,9 @@ const _media = '''
 
 final class _FakeAppleMusic implements AppleMusicDataSource {
   @override
+  Future<List<int>> downloadBytes(String url) async => [9, 8, 7];
+
+  @override
   Future<Map<String, dynamic>?> getSongInfo({
     required String songId,
     required String storefront,

@@ -26,7 +26,15 @@ final class DecryptException implements Exception {
 
 /// Long-lived bidirectional decrypt stream equivalent to upstream
 /// `WrapperManager.decrypt_init`, including its 15-second keepalive.
-final class DecryptSession {
+abstract interface class SampleDecryptor {
+  Future<List<List<int>>> decryptAll({
+    required String adamId,
+    required List<String> keys,
+    required List<EncryptedSample> samples,
+  });
+}
+
+final class DecryptSession implements SampleDecryptor {
   DecryptSession({
     required ManagerMediaTransport manager,
     this.maxAttempts = 3,
@@ -92,6 +100,7 @@ final class DecryptSession {
     throw const DecryptException('Decrypt attempts exhausted');
   }
 
+  @override
   Future<List<List<int>>> decryptAll({
     required String adamId,
     required List<String> keys,
