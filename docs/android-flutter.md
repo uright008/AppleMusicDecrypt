@@ -41,6 +41,18 @@ Start the loopback API:
 poetry run python server.py --host 127.0.0.1 --port 10020
 ```
 
+If wrapper-manager is an insecure gRPC service on `127.0.0.1:8080`, make the
+protocol boundary explicit at launch:
+
+```shell
+poetry run python server.py \\
+  --host 0.0.0.0 --port 10020 \\
+  --manager-url 127.0.0.1:8080 --manager-insecure
+```
+
+The Flutter URL is then `http://<server-ip>:10020`. Port `8080` remains the
+gRPC endpoint and must not be entered as the Flutter HTTP control API URL.
+
 The backend is ready when this returns JSON:
 
 ```shell
@@ -66,6 +78,13 @@ flutter build apk --release
 The output is `build/app/outputs/flutter-apk/app-release.apk`. The app defaults
 to `http://127.0.0.1:10020`; change it in Settings if the API uses another
 loopback port.
+
+## Troubleshooting protocol errors
+
+If `curl http://<host>:<port>/api/v1/health` reports HTTP/0.9, invalid request
+method, or another HTTP/2-related error, that port is likely wrapper-manager
+gRPC rather than the FastAPI control plane. Start `server.py` on a separate
+HTTP port and configure Flutter to use that HTTP port.
 
 ## Apple Music account login
 
