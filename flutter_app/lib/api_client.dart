@@ -1,7 +1,9 @@
-import 'dart:convert';
+import 'dart:async';
 
-import 'package:http/http.dart' as http;
+import 'package:grpc/grpc.dart' as grpc;
 
+import 'grpc/manager_messages.dart';
+import 'grpc/wrapper_manager_client.dart';
 import 'models.dart';
 
 class ApiException implements Exception {
@@ -14,90 +16,281 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-class ApiClient {
-  ApiClient({required String baseUrl, http.Client? client})
-      : baseUrl = _normalizeBaseUrl(baseUrl),
-        _client = client ?? http.Client();
+final class ManagerEndpoint {
+  const ManagerEndpoint({
+    required this.host,
+    required this.port,
+    required this.secure,
+  });
 
-  final String baseUrl;
-  final http.Client _client;
-
-  static String _normalizeBaseUrl(String value) {
-    final normalized = value.trim().replaceFirst(RegExp(r'/+$'), '');
-    final uri = Uri.tryParse(normalized);
+  factory ManagerEndpoint.parse(String value) {
+    final trimmed = value.trim().replaceFirst(RegExp(r'/+$'), '');
+    final withScheme = trimmed.contains('://') ? trimmed : 'grpcs://$trimmed';
+    final uri = Uri.tryParse(withScheme);
     if (uri == null ||
-        !{'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
-        uri.host.isEmpty) {
-      throw const FormatException('请输入完整的 HTTP 或 HTTPS API 地址');
+        !{'grpc', 'grpcs'}.contains(uri.scheme.toLowerCase()) ||
+        uri.host.isEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        (uri.path.isNotEmpty && uri.path != '/')) {
+      throw const FormatException(
+        '请输入 wrapper-manager 地址，例如 grpcs://wm.wol.moe:443',
+      );
     }
-    return normalized;
+    final secure = uri.scheme.toLowerCase() == 'grpcs';
+    return ManagerEndpoint(
+      host: uri.host,
+      port: uri.hasPort ? uri.port : (secure ? 443 : 80),
+      secure: secure,
+    );
   }
 
-  Uri _uri(String path) => Uri.parse('$baseUrl$path');
+  final String host;
+  final int port;
+  final bool secure;
 
-  bool get credentialsTransportIsProtected {
-    final uri = Uri.parse(baseUrl);
-    return uri.scheme == 'https' ||
-        uri.host == '127.0.0.1' ||
-        uri.host == 'localhost' ||
-        uri.host == '::1';
+  bool get isLoopback =>
+      host == '127.0.0.1' || host == 'localhost' || host == '::1';
+
+  @override
+  String toString() {
+    final scheme = secure ? 'grpcs' : 'grpc';
+    final renderedHost = host.contains(':') ? '[$host]' : host;
+    return '$scheme://$renderedHost:$port';
   }
+}
+
+abstract interface class ManagerTransport {
+  Future<StatusData> status();
+
+  Future<int> login(String username, String password);
+
+  Future<int> submitTwoFactor(String username, String code);
+
+  Future<void> logout(String username);
+
+  Future<void> close();
+}
+
+final class GrpcManagerTransport implements ManagerTransport {
+  GrpcManagerTransport(ManagerEndpoint endpoint)
+      : _channel = grpc.ClientChannel(
+          endpoint.host,
+          port: endpoint.port,
+          options: grpc.ChannelOptions(
+            credentials: endpoint.secure
+                ? const grpc.ChannelCredentials.secure()
+                : const grpc.ChannelCredentials.insecure(),
+          ),
+        ) {
+    _stub = WrapperManagerServiceClient(_channel);
+  }
+
+  final grpc.ClientChannel _channel;
+  late final WrapperManagerServiceClient _stub;
+  StreamController<LoginRequest>? _loginRequests;
+  StreamIterator<LoginReply>? _loginReplies;
+  String? _loginUsername;
+  String? _loginPassword;
+
+  @override
+  Future<StatusData> status() async {
+    final reply = await _stub.status(
+      options: grpc.CallOptions(timeout: const Duration(seconds: 8)),
+    );
+    _checkHeader(reply.header);
+    return reply.data;
+  }
+
+  @override
+  Future<int> login(String username, String password) async {
+    await _closeLogin();
+    final requests = StreamController<LoginRequest>();
+    _loginRequests = requests;
+    _loginReplies = StreamIterator(_stub.login(requests.stream));
+    _loginUsername = username;
+    _loginPassword = password;
+    requests.add(LoginRequest(
+      data: LoginData(username: username, password: password),
+    ));
+    return _readLoginState();
+  }
+
+  @override
+  Future<int> submitTwoFactor(String username, String code) async {
+    final requests = _loginRequests;
+    if (requests == null ||
+        _loginReplies == null ||
+        username != _loginUsername ||
+        _loginPassword == null) {
+      throw const ApiException('没有等待验证码的登录请求');
+    }
+    requests.add(LoginRequest(
+      data: LoginData(
+        username: username,
+        password: _loginPassword!,
+        twoStepCode: code,
+      ),
+    ));
+    return _readLoginState();
+  }
+
+  Future<int> _readLoginState() async {
+    final replies = _loginReplies;
+    if (replies == null) throw const ApiException('登录流已关闭');
+    while (await replies.moveNext()) {
+      final header = replies.current.header;
+      if (header.code == -1) {
+        await _closeLogin();
+        throw ApiException(header.msg.isEmpty ? '登录失败' : header.msg);
+      }
+      if (header.code == 0) {
+        await _closeLogin();
+        return 0;
+      }
+      if (header.code == 2) return 2;
+    }
+    await _closeLogin();
+    throw const ApiException('wrapper-manager 提前关闭了登录流');
+  }
+
+  @override
+  Future<void> logout(String username) async {
+    final reply = await _stub.logout(
+      LogoutRequest(data: LogoutData(username: username)),
+      options: grpc.CallOptions(timeout: const Duration(seconds: 20)),
+    );
+    _checkHeader(reply.header);
+  }
+
+  void _checkHeader(ReplyHeader header) {
+    if (header.code != 0) {
+      throw ApiException(
+        header.msg.isEmpty ? 'wrapper-manager 请求失败' : header.msg,
+      );
+    }
+  }
+
+  Future<void> _closeLogin() async {
+    final requests = _loginRequests;
+    final replies = _loginReplies;
+    _loginRequests = null;
+    _loginReplies = null;
+    _loginUsername = null;
+    _loginPassword = null;
+    await requests?.close();
+    await replies?.cancel();
+  }
+
+  @override
+  Future<void> close() async {
+    await _closeLogin();
+    await _channel.shutdown();
+  }
+}
+
+/// Compatibility facade used by the existing GUI while the remaining Python
+/// rip pipeline is moved into Dart/Android. Account and status calls already go
+/// directly to wrapper-manager gRPC; no FastAPI process is involved.
+final class ApiClient {
+  ApiClient({required String baseUrl, ManagerTransport? transport})
+      : endpoint = ManagerEndpoint.parse(baseUrl),
+        _transport = transport ??
+            GrpcManagerTransport(ManagerEndpoint.parse(baseUrl));
+
+  final ManagerEndpoint endpoint;
+  final ManagerTransport _transport;
+  final Set<String> _authenticatedUsers = {};
+
+  String get baseUrl => endpoint.toString();
+
+  bool get credentialsTransportIsProtected =>
+      endpoint.secure || endpoint.isLoopback;
 
   Future<ServerStatus> health() async {
-    final response = await _client
-        .get(_uri('/api/v1/health'))
-        .timeout(const Duration(seconds: 8));
-    return ServerStatus.fromJson(_decode(response));
+    try {
+      final status = await _transport.status();
+      return ServerStatus(
+        ready: status.ready,
+        regions: status.regions,
+        manager: endpoint.toString(),
+        authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+      );
+    } on grpc.GrpcError catch (error) {
+      throw ApiException(_grpcMessage(error));
+    }
   }
 
-  Future<TaskSnapshot> tasks() async {
-    final response = await _client
-        .get(_uri('/api/v1/tasks'))
-        .timeout(const Duration(seconds: 8));
-    return TaskSnapshot.fromJson(_decode(response));
-  }
+  Future<TaskSnapshot> tasks() async => const TaskSnapshot(
+        tasks: [],
+        downloadSpeed: '0.00 kB/s',
+        decryptSpeed: '0.00 kB/s',
+        running: 0,
+      );
 
-  Future<AuthResult> authStatus() async {
-    final response = await _client
-        .get(_uri('/api/v1/auth'))
-        .timeout(const Duration(seconds: 8));
-    return AuthResult.fromJson(_decode(response));
-  }
+  Future<AuthResult> authStatus() async => AuthResult(
+        status:
+            _authenticatedUsers.isEmpty ? 'signed_out' : 'authenticated',
+        authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+      );
 
   Future<AuthResult> login({
     required String username,
     required String password,
   }) async {
-    final response = await _client
-        .post(
-          _uri('/api/v1/auth/login'),
-          headers: const {'content-type': 'application/json'},
-          body: jsonEncode({'username': username, 'password': password}),
-        )
-        .timeout(const Duration(seconds: 55));
-    return AuthResult.fromJson(_decode(response));
+    try {
+      final code = await _transport.login(username, password);
+      if (code == 2) {
+        return AuthResult(
+          status: 'requires_2fa',
+          username: username,
+          authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+        );
+      }
+      _authenticatedUsers.add(username);
+      return AuthResult(
+        status: 'authenticated',
+        username: username,
+        authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+      );
+    } on grpc.GrpcError catch (error) {
+      throw ApiException(_grpcMessage(error));
+    }
   }
 
   Future<AuthResult> submitTwoFactor({
     required String username,
     required String code,
   }) async {
-    final response = await _client
-        .post(
-          _uri('/api/v1/auth/2fa'),
-          headers: const {'content-type': 'application/json'},
-          body: jsonEncode({'username': username, 'code': code}),
-        )
-        .timeout(const Duration(seconds: 70));
-    return AuthResult.fromJson(_decode(response));
+    try {
+      final result = await _transport.submitTwoFactor(username, code);
+      if (result != 0) {
+        throw const ApiException('wrapper-manager 未完成登录');
+      }
+      _authenticatedUsers.add(username);
+      return AuthResult(
+        status: 'authenticated',
+        username: username,
+        authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+      );
+    } on grpc.GrpcError catch (error) {
+      throw ApiException(_grpcMessage(error));
+    }
   }
 
   Future<AuthResult> logout(String username) async {
-    final encodedUsername = Uri.encodeComponent(username);
-    final response = await _client
-        .delete(_uri('/api/v1/auth/$encodedUsername'))
-        .timeout(const Duration(seconds: 20));
-    return AuthResult.fromJson(_decode(response));
+    try {
+      await _transport.logout(username);
+      _authenticatedUsers.remove(username);
+      return AuthResult(
+        status:
+            _authenticatedUsers.isEmpty ? 'signed_out' : 'authenticated',
+        username: username,
+        authenticatedUsers: List.unmodifiable(_authenticatedUsers),
+      );
+    } on grpc.GrpcError catch (error) {
+      throw ApiException(_grpcMessage(error));
+    }
   }
 
   Future<void> enqueue({
@@ -107,50 +300,17 @@ class ApiClient {
     required bool force,
     required bool includeParticipateSongs,
   }) async {
-    final response = await _client
-        .post(
-          _uri('/api/v1/downloads'),
-          headers: const {'content-type': 'application/json'},
-          body: jsonEncode({
-            'urls': urls,
-            'codec': codec,
-            'language': language,
-            'force': force,
-            'include_participate_songs': includeParticipateSongs,
-          }),
-        )
-        .timeout(const Duration(seconds: 12));
-    _decode(response);
+    throw const ApiException('本地下载与媒体封装核心仍在移植中');
   }
 
-  Future<void> cancel(String adamId) async {
-    final response = await _client
-        .delete(_uri('/api/v1/tasks/$adamId'))
-        .timeout(const Duration(seconds: 8));
-    _decode(response);
+  Future<void> cancel(String adamId) async {}
+
+  String _grpcMessage(grpc.GrpcError error) {
+    final detail = error.message;
+    return detail == null || detail.isEmpty
+        ? '无法连接 wrapper-manager gRPC (${error.code})'
+        : detail;
   }
 
-  Map<String, dynamic> _decode(http.Response response) {
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(utf8.decode(response.bodyBytes));
-    } on FormatException {
-      decoded = <String, dynamic>{'detail': response.body};
-    }
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final detail = decoded is Map<String, dynamic>
-          ? decoded['detail']?.toString()
-          : null;
-      throw ApiException(
-        detail ?? 'API 请求失败 (${response.statusCode})',
-        response.statusCode,
-      );
-    }
-    if (decoded is! Map<String, dynamic>) {
-      throw const ApiException('API 返回了无效数据');
-    }
-    return decoded;
-  }
-
-  void close() => _client.close();
+  void close() => unawaited(_transport.close());
 }

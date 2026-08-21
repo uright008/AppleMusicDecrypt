@@ -1,92 +1,105 @@
-import 'dart:convert';
-
 import 'package:applemusicdecrypt_android/api_client.dart';
+import 'package:applemusicdecrypt_android/grpc/manager_messages.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+
+final class _FakeManagerTransport implements ManagerTransport {
+  var loginCode = 2;
+  var twoFactorCode = 0;
+  String? loggedOut;
+
+  @override
+  Future<StatusData> status() async => const StatusData(
+        status: true,
+        regions: ['us'],
+        clientCount: 1,
+        ready: true,
+      );
+
+  @override
+  Future<int> login(String username, String password) async => loginCode;
+
+  @override
+  Future<int> submitTwoFactor(String username, String code) async =>
+      twoFactorCode;
+
+  @override
+  Future<void> logout(String username) async => loggedOut = username;
+
+  @override
+  Future<void> close() async {}
+}
 
 void main() {
-  test('health parses server response', () async {
-    final client = MockClient((request) async => http.Response(
-          '{"ready":true,"regions":["us"],"manager":"wm.example",'
-          '"authenticatedUsers":["listener@example.com"]}',
-          200,
-          headers: {'content-type': 'application/json'},
-        ));
-    final api = ApiClient(baseUrl: 'http://127.0.0.1:10020/', client: client);
+  test('normalizes secure and insecure manager endpoints', () {
+    expect(
+      ManagerEndpoint.parse('wm.wol.moe').toString(),
+      'grpcs://wm.wol.moe:443',
+    );
+    expect(
+      ManagerEndpoint.parse('grpc://192.168.1.7:8080/').toString(),
+      'grpc://192.168.1.7:8080',
+    );
+    expect(
+      () => ManagerEndpoint.parse('http://192.168.1.7:8080'),
+      throwsFormatException,
+    );
+  });
+
+  test('status is read directly from manager transport', () async {
+    final api = ApiClient(
+      baseUrl: 'grpcs://wm.wol.moe:443',
+      transport: _FakeManagerTransport(),
+    );
 
     final status = await api.health();
 
     expect(status.ready, isTrue);
     expect(status.regions, ['us']);
-    expect(status.authenticatedUsers, ['listener@example.com']);
-    expect(api.baseUrl, 'http://127.0.0.1:10020');
+    expect(status.manager, 'grpcs://wm.wol.moe:443');
   });
 
-  test('login with 2FA and logout use the auth API', () async {
-    final client = MockClient((request) async {
-      final body = request.body.isEmpty
-          ? <String, dynamic>{}
-          : jsonDecode(request.body) as Map<String, dynamic>;
-      if (request.url.path.endsWith('/auth/login')) {
-        expect(body['username'], 'listener@example.com');
-        expect(body['password'], 'secret');
-        return http.Response(
-          '{"status":"requires_2fa","username":"listener@example.com",'
-          '"authenticatedUsers":[]}',
-          200,
-        );
-      }
-      if (request.url.path.endsWith('/auth/2fa')) {
-        expect(body['username'], 'listener@example.com');
-        expect(body['code'], '123456');
-        return http.Response(
-          '{"status":"authenticated","username":"listener@example.com",'
-          '"authenticatedUsers":["listener@example.com"]}',
-          200,
-        );
-      }
-      if (request.method == 'DELETE') {
-        expect(request.url.pathSegments.last, 'listener@example.com');
-        return http.Response(
-          '{"status":"signed_out","username":"listener@example.com",'
-          '"authenticatedUsers":[]}',
-          200,
-        );
-      }
-      return http.Response('{"detail":"unexpected request"}', 500);
-    });
-    final api = ApiClient(baseUrl: 'https://backend.example', client: client);
+  test('login keeps the bidirectional stream open for 2FA', () async {
+    final transport = _FakeManagerTransport();
+    final api = ApiClient(
+      baseUrl: 'grpcs://wm.wol.moe:443',
+      transport: transport,
+    );
 
     final first = await api.login(
       username: 'listener@example.com',
       password: 'secret',
     );
     expect(first.requiresTwoFactor, isTrue);
+
     final verified = await api.submitTwoFactor(
       username: 'listener@example.com',
       code: '123456',
     );
     expect(verified.isAuthenticated, isTrue);
     expect(verified.authenticatedUsers, ['listener@example.com']);
+
     final logout = await api.logout('listener@example.com');
     expect(logout.status, 'signed_out');
+    expect(transport.loggedOut, 'listener@example.com');
   });
 
-  test('detects remote plain HTTP for credential warning', () {
-    final api = ApiClient(baseUrl: 'http://192.168.1.7:8080');
-    expect(api.credentialsTransportIsProtected, isFalse);
-    api.close();
-  });
+  test('manager proto wire codec preserves decrypt samples', () {
+    const original = DecryptReply(
+      header: ReplyHeader(code: -1, msg: 'failed'),
+      data: DecryptData(
+        adamId: '123',
+        key: 'skd://key',
+        sampleIndex: 7,
+        sample: [1, 2, 3, 255],
+      ),
+    );
 
-  test('throws API detail for error response', () async {
-    final client = MockClient((request) async => http.Response(
-          '{"detail":"offline"}',
-          503,
-          headers: {'content-type': 'application/json'},
-        ));
-    final api = ApiClient(baseUrl: 'http://127.0.0.1:10020', client: client);
+    final decoded = DecryptReply.fromBuffer(original.writeToBuffer());
 
-    expect(api.health(), throwsA(isA<ApiException>()));
+    expect(decoded.header.code, -1);
+    expect(decoded.header.msg, 'failed');
+    expect(decoded.data.adamId, '123');
+    expect(decoded.data.sampleIndex, 7);
+    expect(decoded.data.sample, [1, 2, 3, 255]);
   });
 }

@@ -1,14 +1,15 @@
 name: applemusicdecrypt_android
-description: Flutter Android client for the AppleMusicDecrypt v2 local API.
+description: Native Flutter/Android port of AppleMusicDecrypt v2.
 publish_to: none
 version: 0.1.0+1
 
 environment:
-  sdk: ">=3.6.0 <4.0.0"
+  sdk: ">=3.8.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  grpc: ^5.1.0
   http: ^1.6.0
   shared_preferences: ^2.5.5
 

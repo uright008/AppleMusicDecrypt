@@ -6,7 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api_client.dart';
 import 'models.dart';
 
-const _defaultApiUrl = 'http://127.0.0.1:10020';
+const _defaultApiUrl = 'grpcs://wm.wol.moe:443';
+const _downloadsReady = false;
 const _addAccountAction = '\u0000add-account';
 const _codecs = <String>[
   'alac',
@@ -139,12 +140,8 @@ class _HomePageState extends State<HomePage> {
   String _formatConnectionError(Object error) {
     final message = error.toString();
     final lower = message.toLowerCase();
-    if (lower.contains('invalid request method') ||
-        lower.contains('http/0.9') ||
-        lower.contains('http2') ||
-        lower.contains('http/2')) {
-      return '这个地址看起来是 wrapper-manager 的 gRPC 端口，不是 HTTP 控制 API。'
-          '请填写 server.py 地址，例如 http://127.0.0.1:10020。';
+    if (lower.contains('handshake') || lower.contains('certificate')) {
+      return 'TLS 握手失败；公网服务使用 grpcs://，本地明文服务使用 grpc://。';
     }
     return message;
   }
@@ -193,8 +190,8 @@ class _HomePageState extends State<HomePage> {
       builder: (context) => AlertDialog(
         title: const Text('连接未加密'),
         content: const Text(
-          '当前后端使用远程 HTTP，Apple ID 密码和验证码会以明文经过网络。'
-          '你已选择允许此模式，但建议尽快改用本机地址或 HTTPS。',
+          '当前 wrapper-manager 使用远程明文 gRPC，Apple ID 密码和验证码会以明文经过网络。'
+          '建议使用 grpcs:// 或本机地址。',
         ),
         actions: [
           TextButton(
@@ -514,7 +511,9 @@ class _HomePageState extends State<HomePage> {
                           setState(() => _includeParticipateSongs = value),
                     ),
                     FilledButton.icon(
-                      onPressed: _submitting || _serverStatus?.ready != true
+                      onPressed: !_downloadsReady ||
+                              _submitting ||
+                              _serverStatus?.ready != true
                           ? null
                           : _enqueue,
                       icon: _submitting
@@ -523,7 +522,9 @@ class _HomePageState extends State<HomePage> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.download),
-                      label: const Text('加入队列'),
+                      label: const Text(
+                        _downloadsReady ? '加入队列' : '下载核心移植中',
+                      ),
                     ),
                   ],
                 ),
@@ -731,7 +732,7 @@ class _BackendSettingsDialogState extends State<_BackendSettingsDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('后端设置'),
+      title: const Text('wrapper-manager 设置'),
       content: TextField(
         controller: _controller,
         autofocus: true,
@@ -739,8 +740,8 @@ class _BackendSettingsDialogState extends State<_BackendSettingsDialog> {
         textInputAction: TextInputAction.done,
         onSubmitted: (_) => _save(),
         decoration: const InputDecoration(
-          labelText: 'HTTP 控制 API 地址',
-          helperText: '不要填写 wrapper-manager 的 gRPC 端口',
+          labelText: 'gRPC 地址',
+          helperText: '公网：grpcs://host:443，本地：grpc://host:8080',
         ),
       ),
       actions: [
@@ -770,11 +771,13 @@ class _ConnectionCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: Icon(connected ? Icons.cloud_done : Icons.cloud_off, color: color),
-        title: Text(connected ? '后端已连接' : '后端未连接'),
+        title: Text(
+          connected ? 'wrapper-manager 已连接' : 'wrapper-manager 未连接',
+        ),
         subtitle: Text(
           connected
               ? '${status!.manager} · ${status!.regions.join(', ')}'
-              : (error ?? '正在连接 HTTP 控制 API…'),
+              : (error ?? '正在建立 gRPC 连接…'),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
