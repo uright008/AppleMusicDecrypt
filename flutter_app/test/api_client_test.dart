@@ -24,22 +24,22 @@ void main() {
   });
 
   test('login with 2FA and logout use the auth API', () async {
-    var loginCalls = 0;
     final client = MockClient((request) async {
+      final body = request.body.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(request.body) as Map<String, dynamic>;
       if (request.url.path.endsWith('/auth/login')) {
-        loginCalls++;
-        final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['username'], 'listener@example.com');
         expect(body['password'], 'secret');
-        if (loginCalls == 1) {
-          expect(body.containsKey('two_factor_code'), isFalse);
-          return http.Response(
-            '{"status":"requires_2fa","username":"listener@example.com",'
-            '"authenticatedUsers":[]}',
-            200,
-          );
-        }
-        expect(body['two_factor_code'], '123456');
+        return http.Response(
+          '{"status":"requires_2fa","username":"listener@example.com",'
+          '"authenticatedUsers":[]}',
+          200,
+        );
+      }
+      if (request.url.path.endsWith('/auth/2fa')) {
+        expect(body['username'], 'listener@example.com');
+        expect(body['code'], '123456');
         return http.Response(
           '{"status":"authenticated","username":"listener@example.com",'
           '"authenticatedUsers":["listener@example.com"]}',
@@ -63,10 +63,9 @@ void main() {
       password: 'secret',
     );
     expect(first.requiresTwoFactor, isTrue);
-    final verified = await api.login(
+    final verified = await api.submitTwoFactor(
       username: 'listener@example.com',
-      password: 'secret',
-      twoFactorCode: '123456',
+      code: '123456',
     );
     expect(verified.isAuthenticated, isTrue);
     expect(verified.authenticatedUsers, ['listener@example.com']);
