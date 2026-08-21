@@ -7,7 +7,8 @@ avoids shipping incompatible Python, FFmpeg, GPAC, Bento4 and gRPC binaries in
 the APK while giving Android users a native Material UI.
 
 > Use this software only with media you are legally entitled to access and
-> process. Keep the API bound to `127.0.0.1`; it has no remote authentication.
+> process. The control API itself has no access-token protection. Prefer
+> `127.0.0.1` or HTTPS, especially when using account login.
 
 ## 1. Install the backend in Termux
 
@@ -66,6 +67,17 @@ The output is `build/app/outputs/flutter-apk/app-release.apk`. The app defaults
 to `http://127.0.0.1:10020`; change it in Settings if the API uses another
 loopback port.
 
+## Apple Music account login
+
+Use the account button in the app bar to log in, complete 2FA, list accounts
+logged in during the current backend process, and log out. Passwords and 2FA
+codes are kept only for the active request and are not persisted by the app or
+FastAPI server.
+
+Remote plain HTTP is supported when explicitly confirmed in the warning dialog,
+but Apple ID credentials and verification codes will cross the network without
+TLS protection. Loopback HTTP or HTTPS is strongly preferred.
+
 ## Architecture
 
 ```mermaid
@@ -76,7 +88,8 @@ flowchart TD
     C --> E["wrapper-manager gRPC"]
 ```
 
-The API exposes health, enqueue, task list/speed, and cancellation endpoints.
+The API exposes health, account login/logout, enqueue, task list/speed, and
+cancellation endpoints.
 It does not duplicate or modify the upstream media pipeline. A future
 standalone APK can replace the Python control plane behind the same API models
 after every native dependency has a maintained Android ARM64 build.
