@@ -131,9 +131,22 @@ class _HomePageState extends State<HomePage> {
       _lastAppliedRefreshRequestId = requestId;
       setState(() {
         _serverStatus = null;
-        _connectionError = error.toString();
+        _connectionError = _formatConnectionError(error);
       });
     }
+  }
+
+  String _formatConnectionError(Object error) {
+    final message = error.toString();
+    final lower = message.toLowerCase();
+    if (lower.contains('invalid request method') ||
+        lower.contains('http/0.9') ||
+        lower.contains('http2') ||
+        lower.contains('http/2')) {
+      return '这个地址看起来是 wrapper-manager 的 gRPC 端口，不是 HTTP 控制 API。'
+          '请填写 server.py 地址，例如 http://127.0.0.1:10020。';
+    }
+    return message;
   }
 
   Future<void> _enqueue() async {
@@ -726,8 +739,8 @@ class _BackendSettingsDialogState extends State<_BackendSettingsDialog> {
         textInputAction: TextInputAction.done,
         onSubmitted: (_) => _save(),
         decoration: const InputDecoration(
-          labelText: 'API 地址',
-          helperText: '默认使用本机 Termux 服务',
+          labelText: 'HTTP 控制 API 地址',
+          helperText: '不要填写 wrapper-manager 的 gRPC 端口',
         ),
       ),
       actions: [
@@ -761,7 +774,7 @@ class _ConnectionCard extends StatelessWidget {
         subtitle: Text(
           connected
               ? '${status!.manager} · ${status!.regions.join(', ')}'
-              : (error ?? '正在连接本机 API…'),
+              : (error ?? '正在连接 HTTP 控制 API…'),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
