@@ -51,12 +51,72 @@ final class _FakeAppleMusic implements AppleMusicDataSource {
     required String albumId,
     required String storefront,
     required String language,
-  }) async =>
-      {
+  }) async => {
         'data': [
-          {'id': albumId},
+          {
+            'id': albumId,
+            'attributes': {
+              'name': 'Test Album',
+              'artistName': 'Test Artist',
+            },
+            'relationships': {
+              'tracks': {
+                'data': [
+                  {'id': '123'},
+                ],
+              },
+            },
+          },
         ],
       };
+
+  @override
+  Future<List<Map<String, dynamic>>> getAlbumTracks({
+    required String albumId,
+    required String storefront,
+  }) async => [
+        {'id': '123'},
+      ];
+
+  @override
+  Future<Map<String, dynamic>> getPlaylistInfo({
+    required String playlistId,
+    required String storefront,
+    required String language,
+  }) async =>
+      {'data': <Object>[]};
+
+  @override
+  Future<List<Map<String, dynamic>>> getPlaylistTracks({
+    required String playlistId,
+    required String storefront,
+    required String language,
+  }) async =>
+      [];
+
+  @override
+  Future<Map<String, dynamic>> getArtistInfo({
+    required String artistId,
+    required String storefront,
+    required String language,
+  }) async =>
+      {'data': <Object>[]};
+
+  @override
+  Future<List<String>> getAlbumsFromArtist({
+    required String artistId,
+    required String storefront,
+    required String language,
+  }) async =>
+      [];
+
+  @override
+  Future<List<String>> getSongsFromArtist({
+    required String artistId,
+    required String storefront,
+    required String language,
+  }) async =>
+      [];
 
   @override
   Future<List<int>> getCover(
@@ -162,6 +222,41 @@ void main() {
     expect(tasks.single.adamId, '123');
     expect(tasks.single.title, 'Test Song');
     expect(tasks.single.prepared?.media.keys, contains(M3u8Resolver.prefetchKey));
+    await coordinator.close();
+  });
+
+  test('album task expands into deduplicated song tasks', () async {
+    final appleMusic = _FakeAppleMusic();
+    final coordinator = NativeRipCoordinator(
+      appleMusic: appleMusic,
+      preparation: RipPreparationService(
+        appleMusic: appleMusic,
+        manager: _FakeManager(),
+      ),
+      maxRunningTasks: 1,
+    );
+    final finished = coordinator.changes.firstWhere(
+      (tasks) =>
+          tasks.any((task) => task.status == NativeRipTaskStatus.expanded) &&
+          tasks.any((task) => task.status == NativeRipTaskStatus.readyForMedia),
+    );
+
+    coordinator.enqueue(
+      'https://music.apple.com/us/album/test/456',
+      const RipPreparationOptions(
+        codec: AudioCodec.alac,
+        language: 'en-US',
+      ),
+    );
+    final tasks = await finished;
+
+    expect(tasks, hasLength(2));
+    expect(
+      tasks.firstWhere((task) => task.status == NativeRipTaskStatus.expanded)
+          .childCount,
+      1,
+    );
+    expect(tasks.last.adamId, '123');
     await coordinator.close();
   });
 }

@@ -15,6 +15,41 @@ abstract interface class AppleMusicDataSource {
     required String language,
   });
 
+  Future<List<Map<String, dynamic>>> getAlbumTracks({
+    required String albumId,
+    required String storefront,
+  });
+
+  Future<Map<String, dynamic>> getPlaylistInfo({
+    required String playlistId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<List<Map<String, dynamic>>> getPlaylistTracks({
+    required String playlistId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<Map<String, dynamic>> getArtistInfo({
+    required String artistId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<List<String>> getAlbumsFromArtist({
+    required String artistId,
+    required String storefront,
+    required String language,
+  });
+
+  Future<List<String>> getSongsFromArtist({
+    required String artistId,
+    required String storefront,
+    required String language,
+  });
+
   Future<List<int>> getCover(
     String templateUrl, {
     required String format,
@@ -79,6 +114,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
   final http.Client _client;
   final Map<String, String> _headers;
 
+  @override
   Future<Map<String, dynamic>> getAlbumInfo({
     required String albumId,
     required String storefront,
@@ -97,6 +133,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         }),
       );
 
+  @override
   Future<List<Map<String, dynamic>>> getAlbumTracks({
     required String albumId,
     required String storefront,
@@ -107,6 +144,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         pageSize: 300,
       );
 
+  @override
   Future<Map<String, dynamic>> getPlaylistInfo({
     required String playlistId,
     required String storefront,
@@ -118,6 +156,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         {'l': language},
       ));
 
+  @override
   Future<List<Map<String, dynamic>>> getPlaylistTracks({
     required String playlistId,
     required String storefront,
@@ -130,6 +169,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         baseQuery: {'l': language},
       );
 
+  @override
   Future<Map<String, dynamic>?> getSongInfo({
     required String songId,
     required String storefront,
@@ -146,6 +186,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
     return null;
   }
 
+  @override
   Future<Map<String, dynamic>> getArtistInfo({
     required String artistId,
     required String storefront,
@@ -157,6 +198,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         {'l': language},
       ));
 
+  @override
   Future<List<String>> getAlbumsFromArtist({
     required String artistId,
     required String storefront,
@@ -170,6 +212,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
         pageSize: 25,
       );
 
+  @override
   Future<List<String>> getSongsFromArtist({
     required String artistId,
     required String storefront,
@@ -201,6 +244,7 @@ final class AppleMusicApi implements AppleMusicDataSource {
     return _data(result).isEmpty ? null : result;
   }
 
+  @override
   Future<List<int>> getCover(
     String templateUrl, {
     required String format,
@@ -228,12 +272,14 @@ final class AppleMusicApi implements AppleMusicDataSource {
     return response.bodyBytes;
   }
 
+  @override
   Future<String> downloadM3u8(String url) async {
     final response = await _client.get(Uri.parse(url), headers: _headers);
     _ensureSuccess(response);
     return utf8.decode(response.bodyBytes);
   }
 
+  @override
   Future<String> resolveUrl(String url) async {
     final response = await _client.get(Uri.parse(url), headers: _headers);
     _ensureSuccess(response);

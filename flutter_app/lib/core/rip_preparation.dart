@@ -16,6 +16,7 @@ final class RipPreparationOptions {
     this.downloadLyrics = true,
     this.codecAlternative = false,
     this.codecPriority = AudioCodec.values,
+    this.includeParticipateSongs = false,
   });
 
   final AudioCodec codec;
@@ -26,6 +27,7 @@ final class RipPreparationOptions {
   final bool downloadLyrics;
   final bool codecAlternative;
   final List<AudioCodec> codecPriority;
+  final bool includeParticipateSongs;
 }
 
 final class PreparedSong {
@@ -165,6 +167,8 @@ enum NativeRipTaskStatus {
   resolving,
   preparing,
   readyForMedia,
+  expanded,
+  skipped,
   failed,
   cancelled,
 }
@@ -179,6 +183,7 @@ final class NativeRipTask {
     this.artist,
     this.error,
     this.prepared,
+    this.childCount = 0,
   });
 
   final String id;
@@ -189,6 +194,7 @@ final class NativeRipTask {
   final String? artist;
   final String? error;
   final PreparedSong? prepared;
+  final int childCount;
 
   NativeRipTask copyWith({
     NativeRipTaskStatus? status,
@@ -197,6 +203,7 @@ final class NativeRipTask {
     String? artist,
     String? error,
     PreparedSong? prepared,
+    int? childCount,
   }) =>
       NativeRipTask(
         id: id,
@@ -207,6 +214,7 @@ final class NativeRipTask {
         artist: artist ?? this.artist,
         error: error ?? this.error,
         prepared: prepared ?? this.prepared,
+        childCount: childCount ?? this.childCount,
       );
 }
 
@@ -226,6 +234,7 @@ final class NativeRipCoordinator {
   final Queue<({String id, RipPreparationOptions options})> _pending = Queue();
   final Map<String, NativeRipTask> _tasks = {};
   final Set<String> _cancelled = {};
+  final Set<String> _claimedAdamIds = {};
   final StreamController<List<NativeRipTask>> _changes =
       StreamController.broadcast();
   var _running = 0;
@@ -256,6 +265,7 @@ final class NativeRipCoordinator {
       return;
     }
     _cancelled.add(id);
+    if (task.adamId != null) _claimedAdamIds.remove(task.adamId);
     _tasks[id] = task.copyWith(status: NativeRipTaskStatus.cancelled);
     _emit();
   }
@@ -283,9 +293,18 @@ final class NativeRipCoordinator {
       }
       if (url == null) throw const FormatException('Unsupported Apple Music URL');
       if (url.type != AppleMusicUrlType.song) {
-        throw const FormatException('Album/playlist/artist expansion is pending');
+        await _expand(id, url, options);
+        return;
       }
       if (_cancelled.contains(id)) return;
+      if (!_claimedAdamIds.add(url.id)) {
+        _update(
+          id,
+          status: NativeRipTaskStatus.skipped,
+          adamId: url.id,
+        );
+        return;
+      }
       _update(
         id,
         status: NativeRipTaskStatus.preparing,
@@ -303,6 +322,7 @@ final class NativeRipCoordinator {
       );
     } catch (error) {
       if (_cancelled.contains(id)) return;
+      _claimedAdamIds.remove(_tasks[id]?.adamId);
       _update(
         id,
         status: NativeRipTaskStatus.failed,
@@ -319,6 +339,7 @@ final class NativeRipCoordinator {
     String? artist,
     String? error,
     PreparedSong? prepared,
+    int? childCount,
   }) {
     final task = _tasks[id];
     if (task == null) return;
@@ -329,14 +350,131 @@ final class NativeRipCoordinator {
       artist: artist,
       error: error,
       prepared: prepared,
+      childCount: childCount,
     );
     _emit();
   }
 
   void _emit() => _changes.add(tasks);
 
+  Future<void> _expand(
+    String id,
+    AppleMusicUrl url,
+    RipPreparationOptions options,
+  ) async {
+    _update(id, status: NativeRipTaskStatus.preparing, adamId: url.id);
+    late final List<String> children;
+    String? title;
+    String? artist;
+    switch (url.type) {
+      case AppleMusicUrlType.album:
+        final album = await _appleMusic.getAlbumInfo(
+          albumId: url.id,
+          storefront: url.storefront,
+          language: options.language,
+        );
+        final resource = _firstData(album);
+        final attributes = _map(resource?['attributes']);
+        title = attributes?['name']?.toString();
+        artist = attributes?['artistName']?.toString();
+        var tracks = _relationshipData(resource, 'tracks');
+        if (_relationshipHasNext(resource, 'tracks') || tracks.isEmpty) {
+          tracks = await _appleMusic.getAlbumTracks(
+            albumId: url.id,
+            storefront: url.storefront,
+          );
+        }
+        children = _songUrls(tracks, url.storefront);
+        break;
+      case AppleMusicUrlType.playlist:
+        final playlist = await _appleMusic.getPlaylistInfo(
+          playlistId: url.id,
+          storefront: url.storefront,
+          language: options.language,
+        );
+        final resource = _firstData(playlist);
+        final attributes = _map(resource?['attributes']);
+        title = attributes?['name']?.toString();
+        artist = attributes?['curatorName']?.toString();
+        var tracks = _relationshipData(resource, 'tracks');
+        if (_relationshipHasNext(resource, 'tracks') || tracks.isEmpty) {
+          tracks = await _appleMusic.getPlaylistTracks(
+            playlistId: url.id,
+            storefront: url.storefront,
+            language: options.language,
+          );
+        }
+        children = _songUrls(tracks, url.storefront);
+        break;
+      case AppleMusicUrlType.artist:
+        final artistInfo = await _appleMusic.getArtistInfo(
+          artistId: url.id,
+          storefront: url.storefront,
+          language: options.language,
+        );
+        final resource = _firstData(artistInfo);
+        title = _map(resource?['attributes'])?['name']?.toString();
+        if (options.includeParticipateSongs) {
+          children = await _appleMusic.getSongsFromArtist(
+            artistId: url.id,
+            storefront: url.storefront,
+            language: options.language,
+          );
+        } else {
+          children = await _appleMusic.getAlbumsFromArtist(
+            artistId: url.id,
+            storefront: url.storefront,
+            language: options.language,
+          );
+        }
+        break;
+      case AppleMusicUrlType.song:
+        throw StateError('Song cannot be expanded');
+    }
+    if (_cancelled.contains(id)) return;
+    _update(
+      id,
+      status: NativeRipTaskStatus.expanded,
+      title: title,
+      artist: artist,
+      childCount: children.length,
+    );
+    for (final child in children.toSet()) {
+      enqueue(child, options);
+    }
+  }
+
   Future<void> close() => _changes.close();
 }
+
+Map<String, dynamic>? _firstData(Map<String, dynamic> body) {
+  final data = body['data'];
+  return data is List && data.isNotEmpty ? _map(data.first) : null;
+}
+
+List<Map<String, dynamic>> _relationshipData(
+  Map<String, dynamic>? resource,
+  String name,
+) {
+  final relationships = _map(resource?['relationships']);
+  final relationship = _map(relationships?[name]);
+  final data = relationship?['data'];
+  return data is List
+      ? data.map(_map).whereType<Map<String, dynamic>>().toList()
+      : <Map<String, dynamic>>[];
+}
+
+bool _relationshipHasNext(Map<String, dynamic>? resource, String name) {
+  final relationships = _map(resource?['relationships']);
+  return _map(relationships?[name])?['next'] != null;
+}
+
+List<String> _songUrls(List<Map<String, dynamic>> rows, String storefront) =>
+    rows
+        .map((row) => row['id']?.toString())
+        .whereType<String>()
+        .map((id) => 'https://music.apple.com/$storefront/song/-/$id')
+        .toList(growable: false);
 
 Map<String, dynamic>? _map(Object? value) =>
     value is Map<String, dynamic> ? value : null;
