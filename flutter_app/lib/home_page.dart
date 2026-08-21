@@ -51,6 +51,9 @@ class _HomePageState extends State<HomePage> {
     running: 0,
   );
   String? _connectionError;
+  int _apiGeneration = 0;
+  int _refreshRequestId = 0;
+  int _lastAppliedRefreshRequestId = 0;
 
   @override
   void initState() {
@@ -60,30 +63,53 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadSettings() async {
     final prefs = SharedPreferencesAsync();
-    _apiUrl = await prefs.getString('apiUrl') ?? _defaultApiUrl;
-    _replaceApi(_apiUrl);
+    final savedApiUrl = await prefs.getString('apiUrl') ?? _defaultApiUrl;
+    if (!mounted) return;
+    try {
+      _replaceApi(savedApiUrl);
+    } on FormatException {
+      _replaceApi(_defaultApiUrl);
+      await prefs.setString('apiUrl', _defaultApiUrl);
+    }
     await _refresh();
+    if (!mounted) return;
     _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
   }
 
   void _replaceApi(String value) {
-    _api?.close();
-    _api = ApiClient(baseUrl: value);
+    final nextApi = ApiClient(baseUrl: value);
+    final previousApi = _api;
+    _api = nextApi;
+    _apiUrl = nextApi.baseUrl;
+    _apiGeneration++;
+    previousApi?.close();
   }
 
   Future<void> _refresh() async {
     final api = _api;
     if (api == null) return;
+    final generation = _apiGeneration;
+    final requestId = ++_refreshRequestId;
     try {
       final results = await Future.wait<dynamic>([api.health(), api.tasks()]);
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _apiGeneration ||
+          requestId < _lastAppliedRefreshRequestId) {
+        return;
+      }
+      _lastAppliedRefreshRequestId = requestId;
       setState(() {
         _serverStatus = results[0] as ServerStatus;
         _snapshot = results[1] as TaskSnapshot;
         _connectionError = null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _apiGeneration ||
+          requestId < _lastAppliedRefreshRequestId) {
+        return;
+      }
+      _lastAppliedRefreshRequestId = requestId;
       setState(() {
         _serverStatus = null;
         _connectionError = error.toString();
@@ -129,38 +155,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _editSettings() async {
-    final controller = TextEditingController(text: _apiUrl);
     final next = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('后端设置'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            labelText: 'API 地址',
-            helperText: '默认使用本机 Termux 服务',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+      builder: (context) => _BackendSettingsDialog(initialUrl: _apiUrl),
     );
-    controller.dispose();
-    if (next == null) return;
+    if (!mounted || next == null) return;
     try {
-      final nextApi = ApiClient(baseUrl: next);
-      _api?.close();
-      _api = nextApi;
-      _apiUrl = nextApi.baseUrl;
+      _replaceApi(next);
+      setState(() {
+        _serverStatus = null;
+        _connectionError = null;
+      });
       await SharedPreferencesAsync().setString('apiUrl', _apiUrl);
       await _refresh();
     } on FormatException catch (error) {
@@ -227,36 +232,62 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: _codec,
-                            decoration: const InputDecoration(labelText: '编码'),
-                            items: _codecs
-                                .map((value) => DropdownMenuItem(
-                                      value: value,
-                                      child: Text(value),
-                                    ))
-                                .toList(growable: false),
-                            onChanged: (value) => setState(() => _codec = value!),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: _language,
-                            decoration: const InputDecoration(labelText: '元数据语言'),
-                            items: _languages
-                                .map((value) => DropdownMenuItem(
-                                      value: value,
-                                      child: Text(value),
-                                    ))
-                                .toList(growable: false),
-                            onChanged: (value) => setState(() => _language = value!),
-                          ),
-                        ),
-                      ],
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final codecDropdown = DropdownButtonFormField<String>(
+                          initialValue: _codec,
+                          isExpanded: true,
+                          decoration: const InputDecoration(labelText: '编码'),
+                          items: _codecs
+                              .map((value) => DropdownMenuItem(
+                                    value: value,
+                                    child: Text(
+                                      value,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ))
+                              .toList(growable: false),
+                          onChanged: (value) =>
+                              setState(() => _codec = value!),
+                        );
+                        final languageDropdown =
+                            DropdownButtonFormField<String>(
+                          initialValue: _language,
+                          isExpanded: true,
+                          decoration:
+                              const InputDecoration(labelText: '元数据语言'),
+                          items: _languages
+                              .map((value) => DropdownMenuItem(
+                                    value: value,
+                                    child: Text(
+                                      value,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ))
+                              .toList(growable: false),
+                          onChanged: (value) =>
+                              setState(() => _language = value!),
+                        );
+                        if (constraints.maxWidth < 420) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              codecDropdown,
+                              const SizedBox(height: 12),
+                              languageDropdown,
+                            ],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            Expanded(child: codecDropdown),
+                            const SizedBox(width: 12),
+                            Expanded(child: languageDropdown),
+                          ],
+                        );
+                      },
                     ),
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
@@ -306,6 +337,62 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _BackendSettingsDialog extends StatefulWidget {
+  const _BackendSettingsDialog({required this.initialUrl});
+
+  final String initialUrl;
+
+  @override
+  State<_BackendSettingsDialog> createState() =>
+      _BackendSettingsDialogState();
+}
+
+class _BackendSettingsDialogState extends State<_BackendSettingsDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialUrl);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() => Navigator.pop(context, _controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('后端设置'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.url,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _save(),
+        decoration: const InputDecoration(
+          labelText: 'API 地址',
+          helperText: '默认使用本机 Termux 服务',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
     );
   }
 }
