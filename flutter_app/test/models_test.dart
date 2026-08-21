@@ -20,4 +20,14 @@ void main() {
     expect(snapshot.tasks.single.canCancel, isTrue);
     expect(snapshot.running, 1);
   });
+
+  test('parses authentication state', () {
+    final result = AuthResult.fromJson({
+      'status': 'requires_2fa',
+      'username': 'listener@example.com',
+      'authenticatedUsers': <String>[],
+    });
+    expect(result.requiresTwoFactor, isTrue);
+    expect(result.username, 'listener@example.com');
+  });
 }
