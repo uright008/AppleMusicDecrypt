@@ -87,6 +87,7 @@ final class FragmentedMp4Extractor implements SampleExtractor {
               data: Uint8List.fromList(raw.sublist(sampleOffset, sampleEnd)),
               duration: entry.duration,
               descriptionIndex: tfhd.sampleDescriptionIndex,
+              offset: sampleOffset,
             ));
             sampleOffset = sampleEnd;
           }

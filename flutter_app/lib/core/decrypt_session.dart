@@ -8,11 +8,13 @@ final class EncryptedSample {
     required this.data,
     required this.duration,
     required this.descriptionIndex,
+    this.offset,
   });
 
   final List<int> data;
   final int duration;
   final int descriptionIndex;
+  final int? offset;
 }
 
 final class DecryptException implements Exception {

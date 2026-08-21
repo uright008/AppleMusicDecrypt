@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'clear_mp4_muxer.dart';
 import 'm3u8_resolver.dart';
 import 'native_media_pipeline.dart';
 
@@ -15,19 +16,14 @@ final class PackagedMedia {
   final String mimeType;
 }
 
-final class PackagingNotImplementedException implements Exception {
-  const PackagingNotImplementedException(this.codec);
-
-  final AudioCodec codec;
-
-  @override
-  String toString() => 'M4A packaging for ${codec.value} is not implemented';
-}
-
-/// Output behavior matching the raw Atmos branch of upstream `encapsulate`.
-/// ALAC/AAC deliberately fail until the ISO-BMFF muxer is complete.
+/// Output behavior matching upstream `encapsulate`: raw Atmos is preserved
+/// when conversion is disabled; other codecs are emitted as clear M4A.
 final class MediaPackager {
-  const MediaPackager();
+  const MediaPackager({
+    ClearMp4Muxer muxer = const ClearMp4Muxer(),
+  }) : _muxer = muxer;
+
+  final ClearMp4Muxer _muxer;
 
   PackagedMedia package(
     DecryptedSong song, {
@@ -48,6 +44,10 @@ final class MediaPackager {
         mimeType: 'audio/ac3',
       );
     }
-    throw PackagingNotImplementedException(codec);
+    return PackagedMedia(
+      bytes: _muxer.mux(song.fragmented, song.decryptedSamples),
+      extension: '.m4a',
+      mimeType: 'audio/mp4',
+    );
   }
 }
