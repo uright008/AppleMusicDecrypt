@@ -84,7 +84,7 @@ final class FragmentedMp4Extractor implements SampleExtractor {
               );
             }
             samples.add(EncryptedSample(
-              data: Uint8List.fromList(raw.sublist(sampleOffset, sampleEnd)),
+              data: Uint8List.sublistView(raw, sampleOffset, sampleEnd),
               duration: entry.duration,
               descriptionIndex: tfhd.sampleDescriptionIndex,
               offset: sampleOffset,

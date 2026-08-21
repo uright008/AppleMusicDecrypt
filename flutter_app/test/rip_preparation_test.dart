@@ -228,6 +228,52 @@ void main() {
     await coordinator.close();
   });
 
+  test('media handler advances a prepared song to done', () async {
+    final appleMusic = _FakeAppleMusic();
+    final mediaStages = <NativeRipTaskStatus>[];
+    final coordinator = NativeRipCoordinator(
+      appleMusic: appleMusic,
+      preparation: RipPreparationService(
+        appleMusic: appleMusic,
+        manager: _FakeManager(),
+      ),
+      maxRunningTasks: 1,
+      mediaHandler: (prepared, onStatus) async {
+        expect(prepared.title, 'Test Song');
+        for (final status in const [
+          NativeRipTaskStatus.downloading,
+          NativeRipTaskStatus.extracting,
+          NativeRipTaskStatus.decrypting,
+          NativeRipTaskStatus.packaging,
+        ]) {
+          mediaStages.add(status);
+          onStatus(status);
+        }
+      },
+    );
+    final done = coordinator.changes.firstWhere(
+      (tasks) => tasks.single.status == NativeRipTaskStatus.done,
+    );
+
+    coordinator.enqueue(
+      'https://music.apple.com/us/song/test/123',
+      const RipPreparationOptions(
+        codec: AudioCodec.alac,
+        language: 'en-US',
+      ),
+    );
+    final tasks = await done;
+
+    expect(tasks.single.status, NativeRipTaskStatus.done);
+    expect(mediaStages, [
+      NativeRipTaskStatus.downloading,
+      NativeRipTaskStatus.extracting,
+      NativeRipTaskStatus.decrypting,
+      NativeRipTaskStatus.packaging,
+    ]);
+    await coordinator.close();
+  });
+
   test('album task expands into deduplicated song tasks', () async {
     final appleMusic = _FakeAppleMusic();
     final coordinator = NativeRipCoordinator(

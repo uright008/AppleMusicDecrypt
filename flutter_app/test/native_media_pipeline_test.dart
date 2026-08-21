@@ -47,7 +47,7 @@ final class _FakeDecryptor implements SampleDecryptor {
 }
 
 void main() {
-  test('downloads, extracts, decrypts and concatenates samples in order',
+  test('downloads, extracts and decrypts samples in order',
       () async {
     final decryptor = _FakeDecryptor();
     final pipeline = NativeMediaPipeline(
@@ -79,7 +79,7 @@ void main() {
       [20, 21],
       [30],
     ]);
-    expect(song.decryptedMedia, [20, 21, 30]);
+    expect(song.decryptedMedia, isEmpty);
     expect(decryptor.receivedKeys, ['key-0', 'key-1']);
   });
 }

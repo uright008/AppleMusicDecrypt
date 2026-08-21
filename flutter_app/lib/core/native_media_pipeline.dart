@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'apple_music_api.dart';
 import 'decrypt_session.dart';
 import 'isobmff.dart';
+import 'm3u8_resolver.dart';
 import 'rip_preparation.dart';
 
 enum NativeMediaStage { downloading, extracting, decrypting }
@@ -55,15 +56,20 @@ final class NativeMediaPipeline {
       keys: prepared.media.keys,
       samples: fragmented.samples,
     );
-    final builder = BytesBuilder(copy: false);
-    for (final sample in decrypted) {
-      builder.add(sample);
+    var decryptedMedia = Uint8List(0);
+    if (fragmented.codec == AudioCodec.ec3 ||
+        fragmented.codec == AudioCodec.ac3) {
+      final builder = BytesBuilder(copy: false);
+      for (final sample in decrypted) {
+        builder.add(sample);
+      }
+      decryptedMedia = builder.takeBytes();
     }
     return DecryptedSong(
       prepared: prepared,
       fragmented: fragmented,
       decryptedSamples: List.unmodifiable(decrypted),
-      decryptedMedia: builder.takeBytes(),
+      decryptedMedia: decryptedMedia,
     );
   }
 }

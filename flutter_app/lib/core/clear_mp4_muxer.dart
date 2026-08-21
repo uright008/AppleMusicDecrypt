@@ -22,15 +22,16 @@ final class ClearMp4Muxer {
 
   Uint8List mux(
     FragmentedSong source,
-    List<List<int>> decryptedSamples,
-  ) {
+    List<List<int>> decryptedSamples, {
+    bool copySource = true,
+  }) {
     if (source.samples.length != decryptedSamples.length) {
       throw Mp4MuxException(
         'Expected ${source.samples.length} decrypted samples, '
         'received ${decryptedSamples.length}',
       );
     }
-    final output = Uint8List.fromList(source.raw);
+    final output = copySource ? Uint8List.fromList(source.raw) : source.raw;
     for (var index = 0; index < source.samples.length; index++) {
       final encrypted = source.samples[index];
       final decrypted = decryptedSamples[index];

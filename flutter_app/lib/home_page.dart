@@ -7,7 +7,7 @@ import 'api_client.dart';
 import 'models.dart';
 
 const _defaultApiUrl = 'grpcs://wm.wol.moe:443';
-const _downloadsReady = false;
+const _downloadsReady = true;
 const _addAccountAction = '\u0000add-account';
 const _codecs = <String>[
   'alac',
@@ -16,7 +16,6 @@ const _codecs = <String>[
   'aac',
   'aac-binaural',
   'aac-downmix',
-  'aac-legacy',
 ];
 const _languages = <String>[
   'zh-Hans-CN',
@@ -872,7 +871,9 @@ class _StatusIcon extends StatelessWidget {
       'FAILED' || 'KILLED' =>
         Icon(Icons.error, color: Theme.of(context).colorScheme.error),
       'DOWNLOADING' => const Icon(Icons.downloading),
+      'EXTRACTING' => const Icon(Icons.inventory_2_outlined),
       'DECRYPTING' => const Icon(Icons.lock_open),
+      'SAVING' => const Icon(Icons.save_alt),
       _ => const Icon(Icons.schedule),
     };
   }

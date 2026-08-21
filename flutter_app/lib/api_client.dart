@@ -2,6 +2,14 @@ import 'dart:async';
 
 import 'package:grpc/grpc.dart' as grpc;
 
+import 'core/android_media_store.dart';
+import 'core/apple_music_api.dart';
+import 'core/decrypt_session.dart';
+import 'core/isobmff.dart';
+import 'core/m3u8_resolver.dart';
+import 'core/native_media_pipeline.dart';
+import 'core/native_output_service.dart';
+import 'core/rip_preparation.dart';
 import 'grpc/manager_messages.dart';
 import 'grpc/wrapper_manager_client.dart';
 import 'models.dart';
@@ -270,6 +278,18 @@ final class ApiClient {
   final ManagerEndpoint endpoint;
   final ManagerTransport _transport;
   final Set<String> _authenticatedUsers = {};
+  AppleMusicApi? _appleMusic;
+  DecryptSession? _decryptSession;
+  NativeRipCoordinator? _coordinator;
+  StreamSubscription<List<NativeRipTask>>? _taskSubscription;
+  Future<void>? _nativeInitialization;
+  TaskSnapshot _taskSnapshot = const TaskSnapshot(
+    tasks: [],
+    downloadSpeed: '0.00 kB/s',
+    decryptSpeed: '0.00 kB/s',
+    running: 0,
+  );
+  var _closed = false;
 
   String get baseUrl => endpoint.toString();
 
@@ -290,12 +310,7 @@ final class ApiClient {
     }
   }
 
-  Future<TaskSnapshot> tasks() async => const TaskSnapshot(
-        tasks: [],
-        downloadSpeed: '0.00 kB/s',
-        decryptSpeed: '0.00 kB/s',
-        running: 0,
-      );
+  Future<TaskSnapshot> tasks() async => _taskSnapshot;
 
   Future<AuthResult> authStatus() async => AuthResult(
         status:
@@ -369,10 +384,141 @@ final class ApiClient {
     required bool force,
     required bool includeParticipateSongs,
   }) async {
-    throw const ApiException('本地下载与媒体封装核心仍在移植中');
+    if (_closed) throw const ApiException('客户端已关闭');
+    await _ensureNativePipeline();
+    final parsedCodec = AudioCodec.parse(codec);
+    if (parsedCodec == AudioCodec.aacLegacy) {
+      throw const ApiException('AAC Legacy/Widevine 路径尚未移植');
+    }
+    final options = RipPreparationOptions(
+      codec: parsedCodec,
+      language: language,
+      includeParticipateSongs: includeParticipateSongs,
+    );
+    for (final url in urls) {
+      _coordinator!.enqueue(url, options);
+    }
   }
 
-  Future<void> cancel(String adamId) async {}
+  Future<void> cancel(String adamId) async {
+    _coordinator?.cancel(adamId);
+  }
+
+  Future<void> _ensureNativePipeline() async {
+    if (_coordinator != null) return;
+    final existing = _nativeInitialization;
+    if (existing != null) return existing;
+    final mediaManager = _transport;
+    if (mediaManager is! ManagerMediaTransport) {
+      throw const ApiException('当前 manager transport 不支持媒体 RPC');
+    }
+    final initialization = _initializeNativePipeline(mediaManager);
+    _nativeInitialization = initialization;
+    try {
+      await initialization;
+    } catch (_) {
+      if (identical(_nativeInitialization, initialization)) {
+        _nativeInitialization = null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _initializeNativePipeline(
+    ManagerMediaTransport manager,
+  ) async {
+    final appleMusic = await AppleMusicApi.create();
+    if (_closed) {
+      appleMusic.close();
+      throw const ApiException('客户端已关闭');
+    }
+    final decryptSession = DecryptSession(manager: manager);
+    final pipeline = NativeMediaPipeline(
+      appleMusic: appleMusic,
+      extractor: const FragmentedMp4Extractor(),
+      decryptor: decryptSession,
+    );
+    const output = NativeOutputService(outputStore: AndroidMediaStore());
+    final preparation = RipPreparationService(
+      appleMusic: appleMusic,
+      manager: manager,
+    );
+    final coordinator = NativeRipCoordinator(
+      appleMusic: appleMusic,
+      preparation: preparation,
+      mediaHandler: (prepared, onStatus) async {
+        final decrypted = await pipeline.process(
+          prepared,
+          onProgress: (stage) => onStatus(switch (stage) {
+            NativeMediaStage.downloading => NativeRipTaskStatus.downloading,
+            NativeMediaStage.extracting => NativeRipTaskStatus.extracting,
+            NativeMediaStage.decrypting => NativeRipTaskStatus.decrypting,
+          }),
+        );
+        onStatus(NativeRipTaskStatus.packaging);
+        await output.save(decrypted);
+      },
+    );
+    _appleMusic = appleMusic;
+    _decryptSession = decryptSession;
+    _coordinator = coordinator;
+    _taskSubscription = coordinator.changes.listen((tasks) {
+      _taskSnapshot = _snapshotFrom(tasks);
+    });
+  }
+
+  static TaskSnapshot _snapshotFrom(List<NativeRipTask> tasks) {
+    final mapped = tasks
+        .map((task) => DownloadTask(
+              adamId: task.id,
+              status: _statusName(task.status),
+              title: task.title,
+              artist: task.artist,
+              album: _attribute(task.prepared?.song, 'albumName'),
+              error: task.error,
+            ))
+        .toList(growable: false);
+    final running = tasks.where((task) {
+      return switch (task.status) {
+        NativeRipTaskStatus.waiting ||
+        NativeRipTaskStatus.done ||
+        NativeRipTaskStatus.expanded ||
+        NativeRipTaskStatus.skipped ||
+        NativeRipTaskStatus.failed ||
+        NativeRipTaskStatus.cancelled =>
+          false,
+        _ => true,
+      };
+    }).length;
+    return TaskSnapshot(
+      tasks: mapped,
+      downloadSpeed: '0.00 kB/s',
+      decryptSpeed: '0.00 kB/s',
+      running: running,
+    );
+  }
+
+  static String _statusName(NativeRipTaskStatus status) => switch (status) {
+        NativeRipTaskStatus.waiting => 'WAITING',
+        NativeRipTaskStatus.resolving ||
+        NativeRipTaskStatus.preparing ||
+        NativeRipTaskStatus.readyForMedia =>
+          'PREPARING',
+        NativeRipTaskStatus.downloading => 'DOWNLOADING',
+        NativeRipTaskStatus.extracting => 'EXTRACTING',
+        NativeRipTaskStatus.decrypting => 'DECRYPTING',
+        NativeRipTaskStatus.packaging => 'SAVING',
+        NativeRipTaskStatus.done => 'DONE',
+        NativeRipTaskStatus.expanded => 'EXPANDED',
+        NativeRipTaskStatus.skipped => 'SKIPPED',
+        NativeRipTaskStatus.failed => 'FAILED',
+        NativeRipTaskStatus.cancelled => 'KILLED',
+      };
+
+  static String? _attribute(Map<String, dynamic>? resource, String name) {
+    final attributes = resource?['attributes'];
+    return attributes is Map ? attributes[name]?.toString() : null;
+  }
 
   String _grpcMessage(grpc.GrpcError error) {
     final detail = error.message;
@@ -381,5 +527,22 @@ final class ApiClient {
         : detail;
   }
 
-  void close() => unawaited(_transport.close());
+  void close() {
+    if (_closed) return;
+    _closed = true;
+    unawaited(_close());
+  }
+
+  Future<void> _close() async {
+    try {
+      await _nativeInitialization;
+    } catch (_) {
+      // Initialization errors are reported to the enqueue call.
+    }
+    await _taskSubscription?.cancel();
+    await _coordinator?.close();
+    await _decryptSession?.close();
+    _appleMusic?.close();
+    await _transport.close();
+  }
 }

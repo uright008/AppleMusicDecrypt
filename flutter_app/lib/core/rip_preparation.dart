@@ -167,11 +167,21 @@ enum NativeRipTaskStatus {
   resolving,
   preparing,
   readyForMedia,
+  downloading,
+  extracting,
+  decrypting,
+  packaging,
+  done,
   expanded,
   skipped,
   failed,
   cancelled,
 }
+
+typedef NativeMediaTaskHandler = Future<void> Function(
+  PreparedSong prepared,
+  void Function(NativeRipTaskStatus status) onStatus,
+);
 
 final class NativeRipTask {
   const NativeRipTask({
@@ -219,17 +229,21 @@ final class NativeRipTask {
 }
 
 /// Bounded task queue equivalent to the registration/semaphore part of
-/// upstream `DownloadManager`. It currently stops at the native media boundary.
+/// upstream `DownloadManager`. A media handler can continue prepared songs
+/// through download, decryption, packaging, and saving.
 final class NativeRipCoordinator {
   NativeRipCoordinator({
     required AppleMusicDataSource appleMusic,
     required RipPreparationService preparation,
+    NativeMediaTaskHandler? mediaHandler,
     this.maxRunningTasks = 4,
   })  : _appleMusic = appleMusic,
-        _preparation = preparation;
+        _preparation = preparation,
+        _mediaHandler = mediaHandler;
 
   final AppleMusicDataSource _appleMusic;
   final RipPreparationService _preparation;
+  final NativeMediaTaskHandler? _mediaHandler;
   final int maxRunningTasks;
   final Queue<({String id, RipPreparationOptions options})> _pending = Queue();
   final Map<String, NativeRipTask> _tasks = {};
@@ -239,12 +253,14 @@ final class NativeRipCoordinator {
       StreamController.broadcast();
   var _running = 0;
   var _sequence = 0;
+  var _closed = false;
 
   Stream<List<NativeRipTask>> get changes => _changes.stream;
 
   List<NativeRipTask> get tasks => List.unmodifiable(_tasks.values);
 
   String enqueue(String sourceUrl, RipPreparationOptions options) {
+    if (_closed) throw StateError('Native rip coordinator is closed');
     final id = 'task-${++_sequence}';
     _tasks[id] = NativeRipTask(
       id: id,
@@ -260,8 +276,11 @@ final class NativeRipCoordinator {
   void cancel(String id) {
     final task = _tasks[id];
     if (task == null ||
-        task.status == NativeRipTaskStatus.readyForMedia ||
-        task.status == NativeRipTaskStatus.failed) {
+        task.status == NativeRipTaskStatus.done ||
+        task.status == NativeRipTaskStatus.expanded ||
+        task.status == NativeRipTaskStatus.skipped ||
+        task.status == NativeRipTaskStatus.failed ||
+        task.status == NativeRipTaskStatus.cancelled) {
       return;
     }
     _cancelled.add(id);
@@ -271,6 +290,7 @@ final class NativeRipCoordinator {
   }
 
   void _drain() {
+    if (_closed) return;
     while (_running < maxRunningTasks && _pending.isNotEmpty) {
       final item = _pending.removeFirst();
       if (_cancelled.contains(item.id)) continue;
@@ -320,6 +340,14 @@ final class NativeRipCoordinator {
         artist: prepared.artist,
         prepared: prepared,
       );
+      final mediaHandler = _mediaHandler;
+      if (mediaHandler != null) {
+        await mediaHandler(prepared, (status) {
+          if (!_cancelled.contains(id)) _update(id, status: status);
+        });
+        if (_cancelled.contains(id)) return;
+        _update(id, status: NativeRipTaskStatus.done);
+      }
     } catch (error) {
       if (_cancelled.contains(id)) return;
       _claimedAdamIds.remove(_tasks[id]?.adamId);
@@ -355,7 +383,9 @@ final class NativeRipCoordinator {
     _emit();
   }
 
-  void _emit() => _changes.add(tasks);
+  void _emit() {
+    if (!_closed) _changes.add(tasks);
+  }
 
   Future<void> _expand(
     String id,
@@ -444,7 +474,13 @@ final class NativeRipCoordinator {
     }
   }
 
-  Future<void> close() => _changes.close();
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    _pending.clear();
+    _cancelled.addAll(_tasks.keys);
+    await _changes.close();
+  }
 }
 
 Map<String, dynamic>? _firstData(Map<String, dynamic> body) {

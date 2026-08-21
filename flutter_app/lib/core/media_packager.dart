@@ -45,7 +45,11 @@ final class MediaPackager {
       );
     }
     return PackagedMedia(
-      bytes: _muxer.mux(song.fragmented, song.decryptedSamples),
+      bytes: _muxer.mux(
+        song.fragmented,
+        song.decryptedSamples,
+        copySource: false,
+      ),
       extension: '.m4a',
       mimeType: 'audio/mp4',
     );

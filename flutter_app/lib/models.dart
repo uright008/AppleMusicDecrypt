@@ -76,8 +76,11 @@ class DownloadTask {
 
   bool get canCancel =>
       status == 'WAITING' ||
+      status == 'PREPARING' ||
       status == 'DOWNLOADING' ||
-      status == 'DECRYPTING';
+      status == 'EXTRACTING' ||
+      status == 'DECRYPTING' ||
+      status == 'SAVING';
 }
 
 class TaskSnapshot {
