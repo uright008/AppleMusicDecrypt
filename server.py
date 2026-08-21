@@ -76,7 +76,6 @@ class DownloadRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
-    two_factor_code: Optional[str] = Field(default=None, max_length=32)
 
     @field_validator("username")
     @classmethod
@@ -86,13 +85,30 @@ class AuthLoginRequest(BaseModel):
             raise ValueError("Username is required")
         return username
 
-    @field_validator("two_factor_code")
+
+class AuthTwoFactorRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=320)
+    code: str = Field(min_length=1, max_length=32)
+
+    @field_validator("username", "code")
     @classmethod
-    def strip_two_factor_code(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        code = value.strip()
-        return code or None
+    def strip_value(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Value cannot be empty")
+        return stripped
+
+
+class AuthStateError(Exception):
+    pass
+
+
+class LoginAttempt:
+    def __init__(self, username: str) -> None:
+        self.username = username
+        self.two_factor_requested = asyncio.Event()
+        self.codes: asyncio.Queue[str] = asyncio.Queue(maxsize=1)
+        self.task: Optional[asyncio.Task] = None
 
 
 class ServerState:
@@ -103,6 +119,8 @@ class ServerState:
         self.history: deque[dict[str, Any]] = deque(maxlen=200)
         self.cancelled_ids: set[str] = set()
         self.authenticated_users: set[str] = set()
+        self.login_attempt: Optional[LoginAttempt] = None
+        self.auth_lock = asyncio.Lock()
 
     async def start(self) -> None:
         self.ripper = Ripper()
@@ -118,6 +136,9 @@ class ServerState:
         self.decrypt_stream_task.add_done_callback(self._consume_background_result)
 
     async def stop(self) -> None:
+        if self.login_attempt and self.login_attempt.task:
+            self.login_attempt.task.cancel()
+            await asyncio.gather(self.login_attempt.task, return_exceptions=True)
         for task in list(self.dispatch_tasks):
             task.cancel()
         if self.decrypt_stream_task:
@@ -202,6 +223,99 @@ class ServerState:
         except asyncio.CancelledError:
             pass
 
+    def _auth_payload(
+        self, status: str, username: Optional[str] = None
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "username": username,
+            "authenticatedUsers": sorted(self.authenticated_users),
+        }
+
+    async def _await_login_transition(
+        self, attempt: LoginAttempt, timeout: float
+    ) -> dict[str, Any]:
+        assert attempt.task is not None
+        two_factor_wait = asyncio.create_task(attempt.two_factor_requested.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {attempt.task, two_factor_wait},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not two_factor_wait.done():
+                two_factor_wait.cancel()
+                await asyncio.gather(two_factor_wait, return_exceptions=True)
+
+        if attempt.task in done:
+            try:
+                await attempt.task
+            except Exception:
+                if self.login_attempt is attempt:
+                    self.login_attempt = None
+                raise
+            self.authenticated_users.add(attempt.username)
+            if self.login_attempt is attempt:
+                self.login_attempt = None
+            return self._auth_payload("authenticated", attempt.username)
+        if attempt.two_factor_requested.is_set():
+            return self._auth_payload("requires_2fa", attempt.username)
+        return self._auth_payload("pending", attempt.username)
+
+    async def auth_status(self) -> dict[str, Any]:
+        attempt = self.login_attempt
+        if attempt:
+            return await self._await_login_transition(attempt, timeout=0)
+        status = "authenticated" if self.authenticated_users else "signed_out"
+        return self._auth_payload(status)
+
+    async def start_login(self, username: str, password: str) -> dict[str, Any]:
+        async with self.auth_lock:
+            if self.login_attempt:
+                current = await self._await_login_transition(
+                    self.login_attempt, timeout=0
+                )
+                if current["status"] in {"pending", "requires_2fa"}:
+                    raise AuthStateError(
+                        f"Login already in progress for {self.login_attempt.username}"
+                    )
+            attempt = LoginAttempt(username)
+
+            async def on_two_factor(_: str, __: str) -> str:
+                attempt.two_factor_requested.set()
+                code = await attempt.codes.get()
+                attempt.two_factor_requested.clear()
+                return code
+
+            attempt.task = asyncio.create_task(
+                it(WrapperManager).login(username, password, on_two_factor)
+            )
+            self.login_attempt = attempt
+        return await self._await_login_transition(attempt, timeout=45)
+
+    async def submit_two_factor(
+        self, username: str, code: str
+    ) -> dict[str, Any]:
+        async with self.auth_lock:
+            attempt = self.login_attempt
+            if not attempt or attempt.username != username:
+                raise AuthStateError("No matching login is waiting for a code")
+            if attempt.task and attempt.task.done():
+                return await self._await_login_transition(attempt, timeout=0)
+            if not attempt.two_factor_requested.is_set():
+                raise AuthStateError("The login has not requested a 2FA code")
+            if attempt.codes.full():
+                raise AuthStateError("A 2FA code is already being processed")
+            await attempt.codes.put(code)
+        return await self._await_login_transition(attempt, timeout=60)
+
+    async def logout_account(self, username: str) -> dict[str, Any]:
+        await it(WrapperManager).logout(username)
+        self.authenticated_users.discard(username)
+        status = "authenticated" if self.authenticated_users else "signed_out"
+        return self._auth_payload(status, username)
+
     async def dispatch_url(self, raw_url: str, request: DownloadRequest) -> None:
         assert self.ripper is not None
         url = AppleMusicURL.parse_url(raw_url)
@@ -262,67 +376,46 @@ async def health() -> dict[str, Any]:
 
 @app.get("/api/v1/auth")
 async def auth_status() -> dict[str, Any]:
-    return {
-        "status": "authenticated" if state.authenticated_users else "signed_out",
-        "authenticatedUsers": sorted(state.authenticated_users),
-    }
+    try:
+        return await state.auth_status()
+    except WrapperManagerException as exc:
+        raise HTTPException(status_code=401, detail=exc.msg or "Login failed") from exc
+    except grpc.aio.AioRpcError as exc:
+        raise HTTPException(status_code=503, detail="wrapper-manager is unavailable") from exc
 
 
 @app.post("/api/v1/auth/login")
 async def login(request: AuthLoginRequest) -> dict[str, Any]:
-    two_factor_requested = False
-
-    async def on_two_factor(_: str, __: str) -> str:
-        nonlocal two_factor_requested
-        two_factor_requested = True
-        return request.two_factor_code or ""
-
     try:
-        await it(WrapperManager).login(
-            request.username, request.password, on_two_factor
-        )
+        return await state.start_login(request.username, request.password)
+    except AuthStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except WrapperManagerException as exc:
-        if two_factor_requested and not request.two_factor_code:
-            return {
-                "status": "requires_2fa",
-                "username": request.username,
-                "authenticatedUsers": sorted(state.authenticated_users),
-            }
-        raise HTTPException(
-            status_code=401, detail=exc.msg or "Apple Music login failed"
-        ) from exc
+        raise HTTPException(status_code=401, detail=exc.msg or "Login failed") from exc
     except grpc.aio.AioRpcError as exc:
-        raise HTTPException(
-            status_code=503, detail="wrapper-manager is unavailable"
-        ) from exc
+        raise HTTPException(status_code=503, detail="wrapper-manager is unavailable") from exc
 
-    state.authenticated_users.add(request.username)
-    return {
-        "status": "authenticated",
-        "username": request.username,
-        "authenticatedUsers": sorted(state.authenticated_users),
-    }
+
+@app.post("/api/v1/auth/2fa")
+async def submit_two_factor(request: AuthTwoFactorRequest) -> dict[str, Any]:
+    try:
+        return await state.submit_two_factor(request.username, request.code)
+    except AuthStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WrapperManagerException as exc:
+        raise HTTPException(status_code=401, detail=exc.msg or "2FA failed") from exc
+    except grpc.aio.AioRpcError as exc:
+        raise HTTPException(status_code=503, detail="wrapper-manager is unavailable") from exc
 
 
 @app.delete("/api/v1/auth/{username}")
 async def logout(username: str) -> dict[str, Any]:
     try:
-        await it(WrapperManager).logout(username)
+        return await state.logout_account(username)
     except WrapperManagerException as exc:
-        raise HTTPException(
-            status_code=400, detail=exc.msg or "Apple Music logout failed"
-        ) from exc
+        raise HTTPException(status_code=400, detail=exc.msg or "Logout failed") from exc
     except grpc.aio.AioRpcError as exc:
-        raise HTTPException(
-            status_code=503, detail="wrapper-manager is unavailable"
-        ) from exc
-
-    state.authenticated_users.discard(username)
-    return {
-        "status": "authenticated" if state.authenticated_users else "signed_out",
-        "username": username,
-        "authenticatedUsers": sorted(state.authenticated_users),
-    }
+        raise HTTPException(status_code=503, detail="wrapper-manager is unavailable") from exc
 
 
 @app.post("/api/v1/downloads", status_code=202)
