@@ -29,8 +29,8 @@ No FastAPI control plane is used by these calls.
 | `src/url.py` | `core/apple_music_url.dart` | Complete |
 | `src/api.py` | Dart Apple Music catalog/download client | Complete for current rip path |
 | `src/task.py`, `src/rip.py` | Bounded Dart queue, container expansion and preparation pipeline | Complete through ordered sample decryption |
-| `src/mp4.py` | Dart HLS selector and fragmented MP4 sample parser | Extraction complete; re-encapsulation pending |
-| `src/metadata.py`, `src/save.py` | Dart metadata and Android MediaStore output | Pending |
+| `src/mp4.py` | Dart HLS selector, fragmented MP4 sample parser and raw Atmos packager | EC3/AC3 complete; M4A re-encapsulation pending |
+| `src/metadata.py`, `src/save.py` | Dart output service and Android MediaStore bridge | Raw audio save complete; metadata pending |
 
 The download button stays disabled until the local rip path is usable. This is
 intentional: a connected wrapper-manager is only the decrypt service, not the
@@ -41,9 +41,12 @@ download/remux pipeline.
 Upstream shells out to GPAC/MP4Box, Bento4, and FFmpeg for fragmented MP4 sample
 extraction, remuxing, metadata, and validation. HLS selection and the common
 `moof/traf/tfhd/trun/mdat` sample-extraction path are now implemented in pure
-Dart. The remaining boundary is rebuilding playable M4A containers, writing
-metadata, saving through Android MediaStore, and integrity validation. Those
-parts can use additional ISO-BMFF code or a maintained Android native/JNI layer.
+Dart. Matching upstream's `atmosConvent = false` branch, decrypted EC3/AC3
+samples can now be concatenated as raw `.ec3`/`.ac3` media and published under
+`Music/AppleMusicDecrypt` through Android MediaStore. The remaining boundary is
+rebuilding playable M4A containers for ALAC/AAC (and optional Atmos conversion),
+writing metadata, and integrity validation. Those parts can use additional
+ISO-BMFF code or a maintained Android native/JNI layer.
 
 ## Build
 
