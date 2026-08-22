@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'android_media_store.dart';
+import 'apple_music_metadata.dart';
 import 'media_packager.dart';
+import 'mp4_metadata_writer.dart';
 import 'native_media_pipeline.dart';
 
 final class SavedMedia {
@@ -14,37 +19,68 @@ final class SavedMedia {
   final PackagedMedia media;
 }
 
-/// Packages decrypted samples and publishes the result to Android's music
-/// collection. This currently supports the raw EC3/AC3 branch that upstream
-/// uses when Atmos-to-M4A conversion is disabled.
+/// Packages decrypted samples, embeds M4A metadata, and publishes the result
+/// under Android's public Download directory.
 final class NativeOutputService {
   const NativeOutputService({
     required AudioOutputStore outputStore,
     MediaPackager packager = const MediaPackager(),
+    Mp4MetadataWriter metadataWriter = const Mp4MetadataWriter(),
   })  : _outputStore = outputStore,
-        _packager = packager;
+        _packager = packager,
+        _metadataWriter = metadataWriter;
 
   final AudioOutputStore _outputStore;
   final MediaPackager _packager;
+  final Mp4MetadataWriter _metadataWriter;
 
   Future<SavedMedia> save(
     DecryptedSong song, {
     String? fileName,
-    String relativePath = 'AppleMusicDecrypt',
+    String? relativePath,
     bool convertAtmosToM4a = false,
   }) async {
-    final media = _packager.package(
+    final metadata = AppleMusicMetadata.fromPrepared(song.prepared);
+    var media = _packager.package(
       song,
       convertAtmosToM4a: convertAtmosToM4a,
     );
-    final baseName = _safeBaseName(fileName ?? song.prepared.title);
+    if (media.extension == '.m4a') {
+      media = PackagedMedia(
+        bytes: _metadataWriter.write(media.bytes, metadata),
+        extension: media.extension,
+        mimeType: media.mimeType,
+      );
+    }
+    final baseName = _safeBaseName(fileName ?? metadata.fileBaseName);
     final displayName = '$baseName${media.extension}';
     final uri = await _outputStore.saveAudio(
       bytes: media.bytes,
       displayName: displayName,
       mimeType: media.mimeType,
-      relativePath: relativePath,
+      relativePath: relativePath ?? metadata.relativePath,
     );
+    final outputPath = relativePath ?? metadata.relativePath;
+    final cover = metadata.cover;
+    if (cover != null &&
+        cover.isNotEmpty &&
+        metadata.outputContext == null) {
+      await _outputStore.saveAudio(
+        bytes: Uint8List.fromList(cover),
+        displayName: metadata.coverIsPng ? 'cover.png' : 'cover.jpg',
+        mimeType: metadata.coverIsPng ? 'image/png' : 'image/jpeg',
+        relativePath: outputPath,
+      );
+    }
+    final lyrics = metadata.lyrics;
+    if (lyrics != null && lyrics.isNotEmpty) {
+      await _outputStore.saveAudio(
+        bytes: Uint8List.fromList(utf8.encode(lyrics)),
+        displayName: '$baseName.lrc',
+        mimeType: 'text/plain',
+        relativePath: outputPath,
+      );
+    }
     return SavedMedia(uri: uri, displayName: displayName, media: media);
   }
 

@@ -87,7 +87,23 @@ final class _FakeAppleMusic implements AppleMusicDataSource {
     required String storefront,
     required String language,
   }) async =>
-      {'data': <Object>[]};
+      {
+        'data': [
+          {
+            'attributes': {
+              'name': 'Test Playlist',
+              'curatorName': 'Test Curator',
+            },
+            'relationships': {
+              'tracks': {
+                'data': [
+                  {'id': '123'},
+                ],
+              },
+            },
+          },
+        ],
+      };
 
   @override
   Future<List<Map<String, dynamic>>> getPlaylistTracks({
@@ -306,6 +322,42 @@ void main() {
       1,
     );
     expect(tasks.last.adamId, '123');
+    await coordinator.close();
+  });
+
+  test('playlist expansion preserves its output directory and index', () async {
+    final appleMusic = _FakeAppleMusic();
+    final coordinator = NativeRipCoordinator(
+      appleMusic: appleMusic,
+      preparation: RipPreparationService(
+        appleMusic: appleMusic,
+        manager: _FakeManager(),
+      ),
+      maxRunningTasks: 1,
+    );
+    final ready = coordinator.changes.firstWhere(
+      (tasks) => tasks.any(
+        (task) =>
+            task.status == NativeRipTaskStatus.readyForMedia &&
+            task.prepared?.outputContext != null,
+      ),
+    );
+
+    coordinator.enqueue(
+      'https://music.apple.com/us/playlist/test/pl.456',
+      const RipPreparationOptions(
+        codec: AudioCodec.alac,
+        language: 'en-US',
+      ),
+    );
+    final tasks = await ready;
+    final child = tasks.firstWhere(
+      (task) => task.status == NativeRipTaskStatus.readyForMedia,
+    );
+
+    expect(child.prepared?.outputContext?.playlistName, 'Test Playlist');
+    expect(child.prepared?.outputContext?.playlistCuratorName, 'Test Curator');
+    expect(child.prepared?.outputContext?.playlistIndex, 1);
     await coordinator.close();
   });
 }

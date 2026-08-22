@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:applemusicdecrypt_android/core/android_media_store.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,7 +18,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       received = call;
-      return 'content://media/external/audio/media/1';
+      return 'content://media/external/downloads/1';
     });
     const store = AndroidMediaStore(channel: channel);
 
@@ -26,7 +28,7 @@ void main() {
       mimeType: 'audio/eac3',
     );
 
-    expect(uri, 'content://media/external/audio/media/1');
+    expect(uri, 'content://media/external/downloads/1');
     expect(received?.method, 'saveAudio');
     final arguments = received?.arguments as Map<Object?, Object?>;
     expect(arguments['displayName'], 'Song.ec3');

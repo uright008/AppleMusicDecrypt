@@ -11,7 +11,7 @@ final class RipPreparationOptions {
     required this.codec,
     required this.language,
     this.coverFormat = 'jpg',
-    this.coverSize = '3000x3000',
+    this.coverSize = '5000x5000',
     this.downloadCover = true,
     this.downloadLyrics = true,
     this.codecAlternative = false,
@@ -38,6 +38,7 @@ final class PreparedSong {
     required this.media,
     required this.cover,
     required this.lyrics,
+    this.outputContext,
   });
 
   final AppleMusicUrl url;
@@ -46,11 +47,34 @@ final class PreparedSong {
   final M3u8Info media;
   final List<int>? cover;
   final String? lyrics;
+  final RipOutputContext? outputContext;
 
   String get title =>
       (_map(song['attributes'])?['name'] ?? url.id).toString();
 
   String? get artist => _map(song['attributes'])?['artistName']?.toString();
+
+  PreparedSong withOutputContext(RipOutputContext? value) => PreparedSong(
+        url: url,
+        song: song,
+        album: album,
+        media: media,
+        cover: cover,
+        lyrics: lyrics,
+        outputContext: value,
+      );
+}
+
+final class RipOutputContext {
+  const RipOutputContext({
+    required this.playlistName,
+    required this.playlistCuratorName,
+    required this.playlistIndex,
+  });
+
+  final String playlistName;
+  final String playlistCuratorName;
+  final int playlistIndex;
 }
 
 final class RipPreparationService {
@@ -193,6 +217,7 @@ final class NativeRipTask {
     this.artist,
     this.error,
     this.prepared,
+    this.outputContext,
     this.childCount = 0,
   });
 
@@ -204,6 +229,7 @@ final class NativeRipTask {
   final String? artist;
   final String? error;
   final PreparedSong? prepared;
+  final RipOutputContext? outputContext;
   final int childCount;
 
   NativeRipTask copyWith({
@@ -213,6 +239,7 @@ final class NativeRipTask {
     String? artist,
     String? error,
     PreparedSong? prepared,
+    RipOutputContext? outputContext,
     int? childCount,
   }) =>
       NativeRipTask(
@@ -224,6 +251,7 @@ final class NativeRipTask {
         artist: artist ?? this.artist,
         error: error ?? this.error,
         prepared: prepared ?? this.prepared,
+        outputContext: outputContext ?? this.outputContext,
         childCount: childCount ?? this.childCount,
       );
 }
@@ -245,7 +273,11 @@ final class NativeRipCoordinator {
   final RipPreparationService _preparation;
   final NativeMediaTaskHandler? _mediaHandler;
   final int maxRunningTasks;
-  final Queue<({String id, RipPreparationOptions options})> _pending = Queue();
+  final Queue<
+      ({
+        String id,
+        RipPreparationOptions options,
+      })> _pending = Queue();
   final Map<String, NativeRipTask> _tasks = {};
   final Set<String> _cancelled = {};
   final Set<String> _claimedAdamIds = {};
@@ -259,15 +291,23 @@ final class NativeRipCoordinator {
 
   List<NativeRipTask> get tasks => List.unmodifiable(_tasks.values);
 
-  String enqueue(String sourceUrl, RipPreparationOptions options) {
+  String enqueue(
+    String sourceUrl,
+    RipPreparationOptions options, {
+    RipOutputContext? outputContext,
+  }) {
     if (_closed) throw StateError('Native rip coordinator is closed');
     final id = 'task-${++_sequence}';
     _tasks[id] = NativeRipTask(
       id: id,
       sourceUrl: sourceUrl,
       status: NativeRipTaskStatus.waiting,
+      outputContext: outputContext,
     );
-    _pending.add((id: id, options: options));
+    _pending.add((
+      id: id,
+      options: options,
+    ));
     _emit();
     _drain();
     return id;
@@ -330,7 +370,8 @@ final class NativeRipCoordinator {
         status: NativeRipTaskStatus.preparing,
         adamId: url.id,
       );
-      final prepared = await _preparation.prepareSong(url, options);
+      var prepared = await _preparation.prepareSong(url, options);
+      prepared = prepared.withOutputContext(task.outputContext);
       if (_cancelled.contains(id)) return;
       _update(
         id,
@@ -393,7 +434,7 @@ final class NativeRipCoordinator {
     RipPreparationOptions options,
   ) async {
     _update(id, status: NativeRipTaskStatus.preparing, adamId: url.id);
-    late final List<String> children;
+    late final List<({String url, RipOutputContext? outputContext})> children;
     String? title;
     String? artist;
     switch (url.type) {
@@ -414,7 +455,9 @@ final class NativeRipCoordinator {
             storefront: url.storefront,
           );
         }
-        children = _songUrls(tracks, url.storefront);
+        children = _songUrls(tracks, url.storefront)
+            .map((child) => (url: child, outputContext: null))
+            .toList(growable: false);
         break;
       case AppleMusicUrlType.playlist:
         final playlist = await _appleMusic.getPlaylistInfo(
@@ -434,7 +477,19 @@ final class NativeRipCoordinator {
             language: options.language,
           );
         }
-        children = _songUrls(tracks, url.storefront);
+        children = [];
+        for (var index = 0; index < tracks.length; index++) {
+          final songId = tracks[index]['id']?.toString();
+          if (songId == null || songId.isEmpty) continue;
+          children.add((
+            url: 'https://music.apple.com/${url.storefront}/song/-/$songId',
+            outputContext: RipOutputContext(
+              playlistName: title ?? url.id,
+              playlistCuratorName: artist ?? '',
+              playlistIndex: index + 1,
+            ),
+          ));
+        }
         break;
       case AppleMusicUrlType.artist:
         final artistInfo = await _appleMusic.getArtistInfo(
@@ -445,17 +500,23 @@ final class NativeRipCoordinator {
         final resource = _firstData(artistInfo);
         title = _map(resource?['attributes'])?['name']?.toString();
         if (options.includeParticipateSongs) {
-          children = await _appleMusic.getSongsFromArtist(
+          final urls = await _appleMusic.getSongsFromArtist(
             artistId: url.id,
             storefront: url.storefront,
             language: options.language,
           );
+          children = urls
+              .map((child) => (url: child, outputContext: null))
+              .toList(growable: false);
         } else {
-          children = await _appleMusic.getAlbumsFromArtist(
+          final urls = await _appleMusic.getAlbumsFromArtist(
             artistId: url.id,
             storefront: url.storefront,
             language: options.language,
           );
+          children = urls
+              .map((child) => (url: child, outputContext: null))
+              .toList(growable: false);
         }
         break;
       case AppleMusicUrlType.song:
@@ -469,8 +530,14 @@ final class NativeRipCoordinator {
       artist: artist,
       childCount: children.length,
     );
-    for (final child in children.toSet()) {
-      enqueue(child, options);
+    final claimed = <String>{};
+    for (final child in children) {
+      if (!claimed.add(child.url)) continue;
+      enqueue(
+        child.url,
+        options,
+        outputContext: child.outputContext,
+      );
     }
   }
 

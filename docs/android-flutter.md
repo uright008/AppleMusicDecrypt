@@ -30,12 +30,17 @@ No FastAPI control plane is used by these calls.
 | `src/api.py` | Dart Apple Music catalog/download client | Complete for current rip path |
 | `src/task.py`, `src/rip.py` | Bounded Dart queue and end-to-end native media handler | Connected to the Flutter queue |
 | `src/mp4.py` | HLS selector, sample parser, clear fragmented-M4A muxer and raw Atmos packager | ALAC/AAC M4A and raw EC3/AC3 implemented |
-| `src/metadata.py`, `src/save.py` | Dart output service and Android MediaStore bridge | Audio save complete; embedded metadata pending |
+| `src/metadata.py`, `src/save.py` | Dart iTunes-tag writer, output service and Android MediaStore bridge | Complete for current M4A/raw output path |
 
 The download button now runs the native Dart pipeline and publishes completed
-files under `Music/AppleMusicDecrypt`. The first download lazily discovers the
-current Apple Music catalog token, so it can take slightly longer to enter the
-queue than later downloads.
+files under `Download/AppleMusicDecrypt`. Album downloads follow upstream's
+`{album_artist}/{album}/{disk}-{tracknum:02d} {title}` layout. Playlist
+downloads use `playlists/{playlistName}/{playlistSongIndex:02d}. {artist} -
+{title}`. Album folders also receive upstream-compatible `cover.jpg`; every
+timed-lyrics download receives a same-name `.lrc` file. Existing paths are
+replaced instead of accumulating MediaStore duplicates. The first download
+lazily discovers the current Apple Music catalog token, so it can take slightly
+longer to enter the queue than later downloads.
 
 ## Native media boundary
 
@@ -46,9 +51,11 @@ Dart. The clear M4A path preserves Apple's fragmented MP4 timing and offsets,
 replaces equal-length decrypted samples in place, restores the original audio
 sample entry from `frma`, and neutralizes CENC-only boxes without bundling
 GPAC/FFmpeg. Matching upstream's `atmosConvent = false` branch, EC3/AC3 can
-also be saved as raw `.ec3`/`.ac3`. Remaining work is embedded metadata,
-integrity validation, broader real-media fixtures, and a streaming/file-backed
-pipeline for very large downloads.
+also be saved as raw `.ec3`/`.ac3`. M4A output embeds the upstream iTunes tag
+set, including title, artists, album, date, composer, genre, track/disc numbers,
+lyrics, artwork, copyright, label, UPC/ISRC, rating, and catalog IDs. Remaining
+work is integrity validation, broader real-media fixtures, and a
+streaming/file-backed pipeline for very large downloads.
 
 ## Build
 

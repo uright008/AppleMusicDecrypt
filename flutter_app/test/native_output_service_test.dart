@@ -10,6 +10,7 @@ import 'package:applemusicdecrypt_android/core/rip_preparation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 final class _OutputStore implements AudioOutputStore {
+  final calls = <({String displayName, String mimeType, String relativePath})>[];
   Uint8List? bytes;
   String? displayName;
   String? mimeType;
@@ -26,26 +27,53 @@ final class _OutputStore implements AudioOutputStore {
     this.displayName = displayName;
     this.mimeType = mimeType;
     this.relativePath = relativePath;
-    return 'content://media/external/audio/media/7';
+    calls.add((
+      displayName: displayName,
+      mimeType: mimeType,
+      relativePath: relativePath,
+    ));
+    return 'content://media/external/downloads/7';
   }
 }
 
-DecryptedSong _song(String title) => DecryptedSong(
+DecryptedSong _song(
+  String title, {
+  List<int>? cover,
+  String? lyrics,
+  RipOutputContext? outputContext,
+}) =>
+    DecryptedSong(
       prepared: PreparedSong(
         url: AppleMusicUrl.tryParse(
           'https://music.apple.com/us/song/test/123',
         )!,
         song: {
-          'attributes': {'name': title},
+          'attributes': {
+            'name': title,
+            'artistName': 'Test Artist',
+            'albumName': 'Test Album',
+            'trackNumber': 2,
+            'discNumber': 1,
+          },
         },
-        album: const {},
+        album: const {
+          'data': [
+            {
+              'attributes': {
+                'name': 'Test Album',
+                'artistName': 'Test Artist',
+              },
+            },
+          ],
+        },
         media: const M3u8Info(
           uri: 'https://example.test/song.mp4',
           keys: [],
           codecId: 'audio-ec3-7680',
         ),
-        cover: null,
-        lyrics: null,
+        cover: cover,
+        lyrics: lyrics,
+        outputContext: outputContext,
       ),
       fragmented: FragmentedSong(
         codec: AudioCodec.ec3,
@@ -64,14 +92,36 @@ void main() {
     final service = NativeOutputService(outputStore: store);
 
     final saved = await service.save(
-      _song('Bad / Song: Name?'),
-      relativePath: 'AppleMusicDecrypt/Atmos',
+      _song('Test Song'),
     );
 
-    expect(saved.uri, 'content://media/external/audio/media/7');
-    expect(saved.displayName, 'Bad _ Song_ Name_.ec3');
+    expect(saved.uri, 'content://media/external/downloads/7');
+    expect(saved.displayName, '1-02 Test Song.ec3');
     expect(store.bytes, [1, 2, 3]);
     expect(store.mimeType, 'audio/eac3');
-    expect(store.relativePath, 'AppleMusicDecrypt/Atmos');
+    expect(
+      store.relativePath,
+      'AppleMusicDecrypt/Test Artist/Test Album',
+    );
+  });
+
+  test('saves upstream-compatible cover and LRC sidecars', () async {
+    final store = _OutputStore();
+    final service = NativeOutputService(outputStore: store);
+
+    await service.save(_song(
+      'Test Song',
+      cover: const [0xff, 0xd8, 0xff],
+      lyrics: '<tt><body><div><p begin="1.25s">Line</p></div></body></tt>',
+    ));
+
+    expect(
+      store.calls.map((call) => call.displayName),
+      ['1-02 Test Song.ec3', 'cover.jpg', '1-02 Test Song.lrc'],
+    );
+    expect(
+      store.calls.map((call) => call.relativePath).toSet(),
+      {'AppleMusicDecrypt/Test Artist/Test Album'},
+    );
   });
 }

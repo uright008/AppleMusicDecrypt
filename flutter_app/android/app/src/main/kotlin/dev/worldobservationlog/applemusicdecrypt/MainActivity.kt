@@ -1,6 +1,7 @@
 package dev.worldobservationlog.applemusicdecrypt
 
 import android.content.ContentValues
+import android.content.ContentUris
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -51,31 +52,51 @@ class MainActivity : FlutterActivity() {
 
             val resolver = applicationContext.contentResolver
             var uri: android.net.Uri? = null
+            var inserted = false
             try {
+                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                val targetPath =
+                    "${Environment.DIRECTORY_DOWNLOADS}/${cleanPath.trim('/')}/"
                 val values = ContentValues().apply {
-                    put(MediaStore.Audio.Media.DISPLAY_NAME, displayName)
-                    put(MediaStore.Audio.Media.MIME_TYPE, mimeType)
-                    put(
-                        MediaStore.Audio.Media.RELATIVE_PATH,
-                        "${Environment.DIRECTORY_MUSIC}/${cleanPath.trim('/')}"
-                    )
-                    put(MediaStore.Audio.Media.IS_PENDING, 1)
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, targetPath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
-                uri = resolver.insert(
-                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    values,
-                ) ?: error("MediaStore insert failed")
-                resolver.openOutputStream(uri, "w")?.use { output ->
+                resolver.query(
+                    collection,
+                    arrayOf(MediaStore.MediaColumns._ID),
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} = ? AND " +
+                        "${MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+                    arrayOf(targetPath, displayName),
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        uri = ContentUris.withAppendedId(
+                            collection,
+                            cursor.getLong(0),
+                        )
+                    }
+                }
+                if (uri == null) {
+                    uri = resolver.insert(collection, values)
+                        ?: error("MediaStore insert failed")
+                    inserted = true
+                } else {
+                    resolver.update(uri, values, null, null)
+                }
+                val outputUri = uri ?: error("MediaStore output URI is unavailable")
+                resolver.openOutputStream(outputUri, "w")?.use { output ->
                     output.write(bytes)
                     output.flush()
                 } ?: error("MediaStore output stream is unavailable")
                 val published = ContentValues().apply {
-                    put(MediaStore.Audio.Media.IS_PENDING, 0)
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
                 }
-                resolver.update(uri, published, null, null)
-                result.success(uri.toString())
+                resolver.update(outputUri, published, null, null)
+                result.success(outputUri.toString())
             } catch (error: Exception) {
-                if (uri != null) resolver.delete(uri, null, null)
+                if (inserted && uri != null) resolver.delete(uri, null, null)
                 result.error("MEDIA_STORE_WRITE_FAILED", error.message, null)
             }
         }
